@@ -32,6 +32,11 @@ fitness-tracker/
 
 ### 1. Daily Log Entry Tab
 
+**Progress Photo:**
+- `st.camera_input("?? Today's Progress Photo (Optional)")` to capture a daily physique update.
+
+
+
 **Camera Input:**
 - `st.camera_input("📸 Scan your meal")` with custom CSS to style the capture area
 - Image is passed to Gemini for analysis before logging
@@ -131,6 +136,13 @@ All Streamlit default styling is overridden via `st.markdown(unsafe_allow_html=T
 - Hide Streamlit header/footer/hamburger menu
 - Full-width mobile layout
 
+### 6. Progress Gallery Tab
+
+**Visual Timeline:**
+- A dedicated 3rd tab showing a chronological grid/timeline of progress photos.
+- Displays the date and weight under each photo.
+- Images are loaded locally from `data/progress_photos/`.
+
 ## Mobile Optimization
 
 - `st.set_page_config(layout="wide", page_title="FUEL 🔥")`
@@ -146,3 +158,4 @@ All Streamlit default styling is overridden via `st.markdown(unsafe_allow_html=T
 - Gemini API failure doesn't block logging
 - Weight field is optional (not every meal entry needs a weight)
 - Graceful handling of missing/corrupt CSV data
+
