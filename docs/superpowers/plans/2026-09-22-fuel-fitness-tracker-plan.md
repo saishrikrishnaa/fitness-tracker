@@ -274,8 +274,8 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Model config - easily changeable to gemini-2.5-pro for maximum reasoning
-MODEL_NAME = "gemini-2.5-flash"
+# Model config - using gemini-2.5-pro for the most rigorous dietary reasoning
+MODEL_NAME = "gemini-2.5-pro"
 
 class ImageAnalysis(BaseModel):
     calories: float = Field(description="Estimated total calories of the meal.")
