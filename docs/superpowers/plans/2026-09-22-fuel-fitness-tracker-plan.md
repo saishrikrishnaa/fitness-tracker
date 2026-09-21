@@ -206,10 +206,10 @@ def save_entry(entry_dict: dict, file_path: str = "data/fitness_log.csv"):
         df_new.to_csv(path, mode='a', header=False, index=False)
         logger.info(f"Appended new entry for {entry_dict.get('date')}.")
 
-def save_progress_photo(image_bytes: bytes, date_str: str, base_dir: str = "data/progress_photos") -> str:
+def save_progress_photo(image_bytes: bytes, date_str: str, timestamp_str: str, base_dir: str = "data/progress_photos") -> str:
     path = Path(base_dir)
     path.mkdir(parents=True, exist_ok=True)
-    file_path = path / f"{date_str}.jpg"
+    file_path = path / f"{date_str}_{timestamp_str}.jpg"
     
     with open(file_path, "wb") as f:
         f.write(image_bytes)
@@ -472,11 +472,12 @@ Modify `app.py` to add imports and the complete Log Entry tab (including the sec
 +                    ai_results = analyze_meal_image(img_bytes, meal_type, workout_notes)
 +                    
 +                    date_str = datetime.now().strftime("%Y-%m-%d")
++                    time_str = datetime.now().strftime("%H%M%S")
 +                    
 +                    photo_path = None
 +                    if progress_photo is not None:
 +                        photo_bytes = progress_photo.getvalue()
-+                        photo_path = save_progress_photo(photo_bytes, date_str)
++                        photo_path = save_progress_photo(photo_bytes, date_str, time_str)
 +                    
 +                    entry = {
 +                        "timestamp": datetime.now().isoformat(),
@@ -595,8 +596,9 @@ Modify `app.py`.
 +            
 +            # Get rows that have a photo
 +            photo_df = df.dropna(subset=['progress_photo'])
-+            # Take the first photo per day if multiple logged
-+            photo_df = photo_df.drop_duplicates(subset=['date'])
++            
++            # Limit to max 5 photos per day
++            photo_df = photo_df.groupby('date').head(5).reset_index(drop=True)
 +            
 +            cols = st.columns(3)
 +            for idx, row in photo_df.iterrows():

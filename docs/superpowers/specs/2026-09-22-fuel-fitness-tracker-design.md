@@ -140,7 +140,7 @@ All Streamlit default styling is overridden via `st.markdown(unsafe_allow_html=T
 
 **Visual Timeline:**
 - A dedicated 3rd tab showing a chronological grid/timeline of progress photos.
-- Displays the date and weight under each photo.
+- Displays the date and weight under each photo. Supports up to 5 photos per day.
 - Images are loaded locally from `data/progress_photos/`.
 
 ## Mobile Optimization
