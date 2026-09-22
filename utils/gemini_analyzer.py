@@ -15,7 +15,7 @@ class ImageAnalysis(BaseModel):
     protein_g: float = Field(description="Estimated protein in grams.")
     carbs_g: float = Field(description="Estimated carbohydrates in grams.")
     fat_g: float = Field(description="Estimated fat in grams.")
-    feedback: list[str] = Field(description="3 brief actionable feedback bullet points about the meal composition (use emojis ?, ??, ??).")
+    feedback: list[str] = Field(description="3 brief actionable feedback bullet points about the meal composition (use emojis ✅, ⚠️, 💡).")
 
 def analyze_meal_image(image_bytes: bytes, meal_type: str, workout_notes: str) -> dict | None:
     api_key = os.environ.get("GEMINI_API_KEY")

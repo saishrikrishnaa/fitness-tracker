@@ -108,8 +108,11 @@ def main() -> None:
                             "progress_photo": photo_path
                         }
                         
-                        save_entry(entry)
-                        st.success("Entry Logged Successfully!")
+                        try:
+                            save_entry(entry)
+                            st.success("Entry Logged Successfully!")
+                        except Exception as e:
+                            st.error(f"Failed to save entry: {e}")
                         
                         st.subheader(f"Estimated: {ai_results['calories']} cal")
                         st.progress(min(ai_results['protein_g'] / 100, 1.0), text=f"Protein: {ai_results['protein_g']}g")

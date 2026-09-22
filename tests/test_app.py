@@ -25,8 +25,9 @@ def test_log_entry_missing_image() -> None:
 
 @patch("utils.gemini_analyzer.analyze_meal_image")
 @patch("utils.data_manager.save_entry")
+@patch("utils.data_manager.save_progress_photo")
 @patch("streamlit.camera_input")
-def test_log_entry_success(mock_camera_input, mock_save_entry, mock_analyze_meal_image) -> None:
+def test_log_entry_success(mock_camera_input, mock_save_progress_photo, mock_save_entry, mock_analyze_meal_image) -> None:
     # Set up mock camera input
     class MockUploadedFile:
         def getvalue(self):
