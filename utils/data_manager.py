@@ -28,9 +28,9 @@ def load_data(file_path: str = "data/fitness_log.csv") -> pd.DataFrame:
         logger.error(f"Error loading data: {e}")
         return pd.DataFrame(columns=COLUMNS)
 
-def save_entry(entry_dict: dict, file_path: str = "data/fitness_log.csv"):
+def save_entry(entry_dict: dict, file_path: str = "data/fitness_log.csv") -> None:
     path = Path(file_path)
-    df_new = pd.DataFrame([entry_dict])
+    df_new = pd.DataFrame([entry_dict], columns=COLUMNS)
     
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -43,7 +43,8 @@ def save_entry(entry_dict: dict, file_path: str = "data/fitness_log.csv"):
 def save_progress_photo(image_bytes: bytes, date_str: str, timestamp_str: str, base_dir: str = "data/progress_photos") -> str:
     path = Path(base_dir)
     path.mkdir(parents=True, exist_ok=True)
-    file_path = path / f"{date_str}_{timestamp_str}.jpg"
+    safe_timestamp = timestamp_str.replace(":", "-")
+    file_path = path / f"{date_str}_{safe_timestamp}.jpg"
     
     with open(file_path, "wb") as f:
         f.write(image_bytes)
