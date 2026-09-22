@@ -132,9 +132,17 @@ def main() -> None:
             with col1:
                 st.metric("Total Meals Logged", len(df))
             with col2:
-                st.metric("Avg Daily Calories", f"{df['calories'].mean():.0f} kcal")
+                if 'calories' in df.columns and 'date' in df.columns:
+                    avg_daily = df.groupby('date')['calories'].sum().mean()
+                    st.metric("Avg Daily Calories", f"{avg_daily:.0f} kcal")
+                else:
+                    st.metric("Avg Daily Calories", "N/A")
             with col3:
-                st.metric("Current Weight", f"{df['weight_kg'].iloc[-1]:.1f} kg" if not df['weight_kg'].isnull().all() else "N/A")
+                if 'weight_kg' in df.columns and not df['weight_kg'].isnull().all():
+                    last_weight = df['weight_kg'].dropna().iloc[-1]
+                    st.metric("Current Weight", f"{last_weight:.1f} kg")
+                else:
+                    st.metric("Current Weight", "N/A")
                 
             st.markdown("### Calorie Trend")
             if 'date' in df.columns and 'calories' in df.columns:
@@ -150,21 +158,27 @@ def main() -> None:
             st.markdown('<div class="glass-card">', unsafe_allow_html=True)
             st.markdown("### 📸 Progress Gallery")
             
-            # Filter rows that have a valid progress photo
-            photo_df = df.dropna(subset=['progress_photo']).copy()
-            photo_df = photo_df[photo_df['progress_photo'] != ""]
-            
-            if photo_df.empty:
+            if 'progress_photo' not in df.columns:
                 st.write("No progress photos found in logs.")
             else:
-                cols = st.columns(3)
-                for idx, (_, row) in enumerate(photo_df.iterrows()):
-                    col_idx = idx % 3
-                    with cols[col_idx]:
-                        if isinstance(row['progress_photo'], str) and os.path.exists(row['progress_photo']):
-                            st.image(row['progress_photo'], caption=f"{row['date']} - {row['weight_kg']}kg", use_column_width=True)
-                        else:
-                            st.write(f"Photo missing: {row['progress_photo']}")
+                # Filter rows that have a valid progress photo
+                photo_df = df.dropna(subset=['progress_photo']).copy()
+                photo_df = photo_df[photo_df['progress_photo'] != ""]
+                
+                if photo_df.empty:
+                    st.write("No progress photos found in logs.")
+                else:
+                    cols = st.columns(3)
+                    for idx, (_, row) in enumerate(photo_df.iterrows()):
+                        col_idx = idx % 3
+                        with cols[col_idx]:
+                            date_str = row['date'] if 'date' in row else "Unknown"
+                            weight_str = f"{row['weight_kg']}kg" if 'weight_kg' in row else ""
+                            caption = f"{date_str} - {weight_str}".strip(' -')
+                            if isinstance(row['progress_photo'], str) and os.path.exists(row['progress_photo']):
+                                st.image(row['progress_photo'], caption=caption, use_column_width=True)
+                            else:
+                                st.write(f"Photo missing: {row['progress_photo']}")
             st.markdown('</div>', unsafe_allow_html=True)
 
 if __name__ == "__main__":
