@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "FUEL",
+    "slug": "fuel-fitness",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "scheme": "fuel",
+    "plugins": [
+      "expo-router",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow FUEL to access camera for meal scanning."
+        }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Allow FUEL to use FaceID to unlock the Progress Vault."
+        }
+      ]
+    ]
+  }
+}
