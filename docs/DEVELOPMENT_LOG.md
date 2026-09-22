@@ -22,7 +22,7 @@
 
 | Task | Description | Status | Verification & Review |
 |---|---|---|---|
-| **Task 1** | Expo App Scaffolding, Navigation Layout & Theme System | 🟡 In Progress | Implementer subagent running |
+| **Task 1** | Expo App Scaffolding, Navigation Layout & Theme System | 🟢 Completed | Two-stage review passed, merged (`f26b46a`) |
 | **Task 2** | Local Database (SQLite) & Photo Storage Engine | ⚪ Pending | Spec & Code Quality Review |
 | **Task 3** | Gemini 2.5 Pro Vision AI Client & Secure Store | ⚪ Pending | Spec & Code Quality Review |
 | **Task 4** | Tab Navigation & Log Entry Screen (Camera + AI Scan) | ⚪ Pending | Spec & Code Quality Review |
