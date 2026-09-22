@@ -1,9 +1,0 @@
-[theme]
-primaryColor = "#06B6D4"
-backgroundColor = "#0D0D0D"
-secondaryBackgroundColor = "#1A1A1A"
-textColor = "#F3F4F6"
-font = "sans serif"
-
-[server]
-runOnSave = true
