@@ -70,6 +70,7 @@ import pandas as pd
 def test_analytics_tab_empty(mock_load_data) -> None:
     mock_load_data.return_value = pd.DataFrame()
     at = AppTest.from_file("app.py").run(timeout=15)
+    at.sidebar.radio[0].set_value("📊 Analytics").run(timeout=15)
     
     assert "No data logged yet. Head to Log Entry to get started!" in [i.value for i in at.info]
 
@@ -81,6 +82,7 @@ def test_analytics_tab_populated(mock_load_data) -> None:
         'weight_kg': [70.5, 70.0]
     })
     at = AppTest.from_file("app.py").run(timeout=15)
+    at.sidebar.radio[0].set_value("📊 Analytics").run(timeout=15)
     
     metrics = at.metric
     assert len(metrics) >= 3
@@ -95,6 +97,9 @@ def test_analytics_tab_populated(mock_load_data) -> None:
 def test_gallery_tab_empty(mock_load_data) -> None:
     mock_load_data.return_value = pd.DataFrame()
     at = AppTest.from_file("app.py").run(timeout=15)
+    at.sidebar.radio[0].set_value("🖼️ Progress Vault").run(timeout=15)
+    at.text_input[0].set_value("1234").run(timeout=15)
+    at.button[0].click().run(timeout=15)
     
     assert "No photos yet." in [i.value for i in at.info]
 
@@ -110,6 +115,9 @@ def test_gallery_tab_populated(mock_exists, mock_st_image, mock_load_data) -> No
         'progress_photo': ['path/to/photo.jpg']
     })
     at = AppTest.from_file("app.py").run(timeout=15)
+    at.sidebar.radio[0].set_value("🖼️ Progress Vault").run(timeout=15)
+    at.text_input[0].set_value("1234").run(timeout=15)
+    at.button[0].click().run(timeout=15)
     
     # We will just assert the app ran successfully without errors and we can't reliably test at.image if it's not exposed
     assert not at.exception

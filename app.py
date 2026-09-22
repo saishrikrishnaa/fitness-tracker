@@ -53,9 +53,10 @@ def main() -> None:
     st.markdown('<h1 class="fuel-title">FUEL 🔥</h1>', unsafe_allow_html=True)
     st.markdown('<p class="fuel-subtitle">Track · Analyze · Transform</p>', unsafe_allow_html=True)
     
-    tab1, tab2, tab3 = st.tabs(["📝 Log Entry", "📊 Analytics", "🖼️ Progress Gallery"])
+    st.sidebar.title("FUEL Navigation")
+    page = st.sidebar.radio("Go to", ["📝 Log Entry", "📊 Analytics", "🖼️ Progress Vault"])
     
-    with tab1:
+    if page == "📝 Log Entry":
         st.markdown('<div class="glass-card">', unsafe_allow_html=True)
         
         col_a, col_b = st.columns(2)
@@ -125,7 +126,7 @@ def main() -> None:
                             
         st.markdown('</div>', unsafe_allow_html=True)
         
-    with tab2:
+    elif page == "📊 Analytics":
         df = load_data()
         if df.empty:
             st.info("No data logged yet. Head to Log Entry to get started!")
@@ -153,36 +154,52 @@ def main() -> None:
                 st.line_chart(trend_df.set_index('date'))
             st.markdown('</div>', unsafe_allow_html=True)
         
-    with tab3:
-        df = load_data()
-        if df.empty:
-            st.info("No photos yet.")
-        else:
-            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-            st.markdown("### 📸 Progress Gallery")
+    elif page == "🖼️ Progress Vault":
+        if "vault_unlocked" not in st.session_state:
+            st.session_state.vault_unlocked = False
             
-            if 'progress_photo' not in df.columns:
-                st.write("No progress photos found in logs.")
+        if not st.session_state.vault_unlocked:
+            st.markdown("### 🔐 Progress Vault is Locked")
+            pin = st.text_input("Enter Vault PIN (Hint: 1234)", type="password")
+            if st.button("Unlock"):
+                if pin == "1234":
+                    st.session_state.vault_unlocked = True
+                    st.rerun()
+                else:
+                    st.error("Incorrect PIN")
+        else:
+            if st.button("Lock Vault"):
+                st.session_state.vault_unlocked = False
+                st.rerun()
+            df = load_data()
+            if df.empty:
+                st.info("No photos yet.")
             else:
-                # Filter rows that have a valid progress photo
-                photo_df = df.dropna(subset=['progress_photo']).copy()
-                photo_df = photo_df[photo_df['progress_photo'] != ""]
+                st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+                st.markdown("### 📸 Progress Gallery")
                 
-                if photo_df.empty:
+                if 'progress_photo' not in df.columns:
                     st.write("No progress photos found in logs.")
                 else:
-                    cols = st.columns(3)
-                    for idx, (_, row) in enumerate(photo_df.iterrows()):
-                        col_idx = idx % 3
-                        with cols[col_idx]:
-                            date_str = row['date'] if 'date' in row else "Unknown"
-                            weight_str = f"{row['weight_kg']}kg" if 'weight_kg' in row else ""
-                            caption = f"{date_str} - {weight_str}".strip(' -')
-                            if isinstance(row['progress_photo'], str) and os.path.exists(row['progress_photo']):
-                                st.image(row['progress_photo'], caption=caption, use_column_width=True)
-                            else:
-                                st.write(f"Photo missing: {row['progress_photo']}")
-            st.markdown('</div>', unsafe_allow_html=True)
+                    # Filter rows that have a valid progress photo
+                    photo_df = df.dropna(subset=['progress_photo']).copy()
+                    photo_df = photo_df[photo_df['progress_photo'] != ""]
+                    
+                    if photo_df.empty:
+                        st.write("No progress photos found in logs.")
+                    else:
+                        cols = st.columns(3)
+                        for idx, (_, row) in enumerate(photo_df.iterrows()):
+                            col_idx = idx % 3
+                            with cols[col_idx]:
+                                date_str = row['date'] if 'date' in row else "Unknown"
+                                weight_str = f"{row['weight_kg']}kg" if 'weight_kg' in row else ""
+                                caption = f"{date_str} - {weight_str}".strip(' -')
+                                if isinstance(row['progress_photo'], str) and os.path.exists(row['progress_photo']):
+                                    st.image(row['progress_photo'], caption=caption, use_column_width=True)
+                                else:
+                                    st.write(f"Photo missing: {row['progress_photo']}")
+                st.markdown('</div>', unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
