@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 @patch("streamlit.markdown")
 @patch("streamlit.tabs")
 @patch("streamlit.write")
-def test_app_imports_and_runs(mock_write, mock_tabs, mock_markdown, mock_set_page_config):
+def test_app_imports_and_runs(mock_write: MagicMock, mock_tabs: MagicMock, mock_markdown: MagicMock, mock_set_page_config: MagicMock) -> None:
     # Setup mock for tabs
     mock_tab1 = MagicMock()
     mock_tab2 = MagicMock()
