@@ -1,0 +1,7 @@
+streamlit==1.32.0
+pandas==2.2.1
+plotly==5.20.0
+google-genai==0.3.0
+pydantic==2.6.4
+pillow==10.2.0
+pytest==8.1.1
