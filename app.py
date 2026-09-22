@@ -123,10 +123,49 @@ def main() -> None:
         st.markdown('</div>', unsafe_allow_html=True)
         
     with tab2:
-        st.write("Analytics UI goes here")
+        df = load_data()
+        if df.empty:
+            st.info("No data logged yet. Head to Log Entry to get started!")
+        else:
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Meals Logged", len(df))
+            with col2:
+                st.metric("Avg Daily Calories", f"{df['calories'].mean():.0f} kcal")
+            with col3:
+                st.metric("Current Weight", f"{df['weight_kg'].iloc[-1]:.1f} kg" if not df['weight_kg'].isnull().all() else "N/A")
+                
+            st.markdown("### Calorie Trend")
+            if 'date' in df.columns and 'calories' in df.columns:
+                trend_df = df.groupby('date')['calories'].sum().reset_index()
+                st.line_chart(trend_df.set_index('date'))
+            st.markdown('</div>', unsafe_allow_html=True)
         
     with tab3:
-        st.write("Progress Gallery UI goes here")
+        df = load_data()
+        if df.empty:
+            st.info("No photos yet.")
+        else:
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.markdown("### 📸 Progress Gallery")
+            
+            # Filter rows that have a valid progress photo
+            photo_df = df.dropna(subset=['progress_photo']).copy()
+            photo_df = photo_df[photo_df['progress_photo'] != ""]
+            
+            if photo_df.empty:
+                st.write("No progress photos found in logs.")
+            else:
+                cols = st.columns(3)
+                for idx, (_, row) in enumerate(photo_df.iterrows()):
+                    col_idx = idx % 3
+                    with cols[col_idx]:
+                        if isinstance(row['progress_photo'], str) and os.path.exists(row['progress_photo']):
+                            st.image(row['progress_photo'], caption=f"{row['date']} - {row['weight_kg']}kg", use_column_width=True)
+                        else:
+                            st.write(f"Photo missing: {row['progress_photo']}")
+            st.markdown('</div>', unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
