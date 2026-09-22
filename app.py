@@ -81,34 +81,36 @@ def main() -> None:
                     img_bytes = meal_image.getvalue()
                     ai_results = analyze_meal_image(img_bytes, meal_type, workout_notes)
                     
-                    date_str = datetime.now().strftime("%Y-%m-%d")
-                    time_str = datetime.now().strftime("%H%M%S")
-                    
-                    photo_path = None
-                    if progress_photo is not None:
-                        photo_bytes = progress_photo.getvalue()
-                        photo_path = save_progress_photo(photo_bytes, date_str, time_str)
-                    
-                    entry = {
-                        "timestamp": datetime.now().isoformat(),
-                        "date": date_str,
-                        "meal_type": meal_type,
-                        "calories": ai_results["calories"] if ai_results else 0.0,
-                        "protein_g": ai_results["protein_g"] if ai_results else 0.0,
-                        "carbs_g": ai_results["carbs_g"] if ai_results else 0.0,
-                        "fat_g": ai_results["fat_g"] if ai_results else 0.0,
-                        "weight_kg": weight_kg,
-                        "workout_notes": workout_notes,
-                        "wind_down": wind_down,
-                        "ai_feedback": json.dumps(ai_results["feedback"]) if ai_results else '[]',
-                        "image_name": "logged_image.jpg",
-                        "progress_photo": photo_path
-                    }
-                    
-                    save_entry(entry)
-                    st.success("Entry Logged Successfully!")
-                    
-                    if ai_results:
+                    if not ai_results:
+                        st.error("Failed to analyze meal.")
+                    else:
+                        date_str = datetime.now().strftime("%Y-%m-%d")
+                        time_str = datetime.now().strftime("%H%M%S")
+                        
+                        photo_path = None
+                        if progress_photo is not None:
+                            photo_bytes = progress_photo.getvalue()
+                            photo_path = save_progress_photo(photo_bytes, date_str, time_str)
+                        
+                        entry = {
+                            "timestamp": datetime.now().isoformat(),
+                            "date": date_str,
+                            "meal_type": meal_type,
+                            "calories": ai_results["calories"],
+                            "protein_g": ai_results["protein_g"],
+                            "carbs_g": ai_results["carbs_g"],
+                            "fat_g": ai_results["fat_g"],
+                            "weight_kg": weight_kg,
+                            "workout_notes": workout_notes,
+                            "wind_down": wind_down,
+                            "ai_feedback": json.dumps(ai_results["feedback"]),
+                            "image_name": "logged_image.jpg",
+                            "progress_photo": photo_path
+                        }
+                        
+                        save_entry(entry)
+                        st.success("Entry Logged Successfully!")
+                        
                         st.subheader(f"Estimated: {ai_results['calories']} cal")
                         st.progress(min(ai_results['protein_g'] / 100, 1.0), text=f"Protein: {ai_results['protein_g']}g")
                         st.progress(min(ai_results['carbs_g'] / 300, 1.0), text=f"Carbs: {ai_results['carbs_g']}g")
