@@ -28,11 +28,16 @@ def test_save_and_load_entry(tmp_path: Path):
     assert df.iloc[0]["calories"] == 400.0
     assert df.iloc[0]["progress_photo"] == "data/progress_photos/2026-09-22.jpg"
 
-def test_save_progress_photo(tmp_path: Path, monkeypatch):
-    # Mock the directory creation so it saves to tmp_path
-    def mock_photo_dir():
-        d = tmp_path / "progress_photos"
-        d.mkdir(exist_ok=True)
-        return d
-        
-    pass
+def test_save_progress_photo(tmp_path: Path):
+    test_dir = tmp_path / "progress_photos"
+    image_bytes = b"fake_image_data"
+    
+    saved_path = save_progress_photo(
+        image_bytes, 
+        "2026-09-22", 
+        "100000", 
+        str(test_dir)
+    )
+    
+    assert Path(saved_path).exists()
+    assert Path(saved_path).read_bytes() == b"fake_image_data"
