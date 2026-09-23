@@ -9,9 +9,17 @@ export interface MealAnalysisResult {
   feedback: string[];
 }
 
+export function getMimeType(uri: string): string {
+  const clean = uri.toLowerCase();
+  if (clean.endsWith('.png')) return 'image/png';
+  if (clean.endsWith('.webp')) return 'image/webp';
+  if (clean.endsWith('.heic')) return 'image/heic';
+  return 'image/jpeg';
+}
+
 export function parseGeminiResponse(jsonText: string): MealAnalysisResult | null {
   try {
-    const cleanText = jsonText.replace(/```json/g, '').replace(/```/g, '').trim();
+    const cleanText = jsonText.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
     const parsed = JSON.parse(cleanText);
     return {
       calories: Number(parsed.calories) || 0,
@@ -55,10 +63,13 @@ export async function analyzeMealImageOnDevice(
   `;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${apiKey}`;
+  const mimeType = getMimeType(imageUri);
+  const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(30000) : undefined;
 
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal,
     body: JSON.stringify({
       contents: [
         {
@@ -66,7 +77,7 @@ export async function analyzeMealImageOnDevice(
             { text: prompt },
             {
               inline_data: {
-                mime_type: 'image/jpeg',
+                mime_type: mimeType,
                 data: base64Image,
               },
             },

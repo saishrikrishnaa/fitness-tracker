@@ -1,4 +1,4 @@
-﻿import { parseGeminiResponse, analyzeMealImageOnDevice } from '../services/gemini';
+﻿import { parseGeminiResponse, analyzeMealImageOnDevice, getMimeType } from '../services/gemini';
 import { getApiKey, setApiKey, getVaultPin, setVaultPin } from '../services/secureStore';
 import * as SecureStore from 'expo-secure-store';
 import * as FileSystem from 'expo-file-system';
@@ -44,8 +44,8 @@ describe('Gemini Response Parser', () => {
     });
   });
 
-  it('handles markdown codeblocks wrapping json', () => {
-    const rawJson = '```json\n{"calories": 400, "protein_g": 30, "carbs_g": 40, "fat_g": 10, "feedback": ["✅ Good balance"]}\n```';
+  it('handles markdown codeblocks wrapping json (case-insensitive)', () => {
+    const rawJson = '```JSON\n{"calories": 400, "protein_g": 30, "carbs_g": 40, "fat_g": 10, "feedback": ["✅ Good balance"]}\n```';
     const parsed = parseGeminiResponse(rawJson);
     expect(parsed).toEqual({
       calories: 400,
@@ -59,6 +59,16 @@ describe('Gemini Response Parser', () => {
   it('falls back gracefully on invalid JSON', () => {
     const parsed = parseGeminiResponse('invalid non-json response');
     expect(parsed).toBeNull();
+  });
+});
+
+describe('MIME type resolution', () => {
+  it('resolves image mime types correctly based on file extension', () => {
+    expect(getMimeType('file:///path/meal.png')).toBe('image/png');
+    expect(getMimeType('file:///path/meal.WEBP')).toBe('image/webp');
+    expect(getMimeType('file:///path/meal.heic')).toBe('image/heic');
+    expect(getMimeType('file:///path/meal.jpg')).toBe('image/jpeg');
+    expect(getMimeType('file:///path/meal.jpeg')).toBe('image/jpeg');
   });
 });
 
@@ -99,7 +109,7 @@ describe('analyzeMealImageOnDevice', () => {
     );
   });
 
-  it('calls Gemini API and returns parsed meal analysis', async () => {
+  it('calls Gemini API and returns parsed meal analysis with correct MIME type', async () => {
     await setApiKey('test-key');
 
     const mockResponsePayload = {
@@ -127,7 +137,7 @@ describe('analyzeMealImageOnDevice', () => {
       json: async () => mockResponsePayload,
     } as any);
 
-    const result = await analyzeMealImageOnDevice('file:///image.jpg', 'Lunch', 'Upper body workout');
+    const result = await analyzeMealImageOnDevice('file:///image.png', 'Lunch', 'Upper body workout');
     expect(result).toEqual({
       calories: 550,
       protein_g: 35,
@@ -140,6 +150,7 @@ describe('analyzeMealImageOnDevice', () => {
       expect.stringContaining('gemini-2.5-pro:generateContent?key=test-key'),
       expect.objectContaining({
         method: 'POST',
+        body: expect.stringContaining('"mime_type":"image/png"'),
       })
     );
   });
