@@ -19,6 +19,11 @@ jest.mock('react-native', () => {
   };
 });
 
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 44, bottom: 34, left: 0, right: 0 }),
+  SafeAreaProvider: ({ children }: any) => children,
+}));
+
 jest.mock('expo-file-system', () => ({
   documentDirectory: 'file:///data/user/0/host.exp.exponent/files/',
   getInfoAsync: jest.fn(),

@@ -10,6 +10,7 @@ import {
   Alert,
   StyleSheet,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
 import { Camera, ImagePlus, Zap, Image as ImageIcon } from 'lucide-react-native';
@@ -24,6 +25,7 @@ import { saveLogEntry } from '../../db/database';
 export const MEAL_TYPES: MealType[] = ['Breakfast', 'Lunch', 'Dinner', 'Snack'];
 
 export default function LogScreen(): JSX.Element {
+  const insets = useSafeAreaInsets();
   const [mealPhoto, setMealPhoto] = useState<string | null>(null);
   const [progressPhoto, setProgressPhoto] = useState<string | null>(null);
   const [mealType, setMealType] = useState<MealType>('Lunch');
@@ -122,11 +124,17 @@ export default function LogScreen(): JSX.Element {
 
       setAiResult(analysis);
 
+      // Save photos locally
       const savedMealUri = await savePhotoLocally(mealPhoto, 'meals');
       const savedProgressUri = progressPhoto
         ? await savePhotoLocally(progressPhoto, 'progress')
         : null;
 
+      // Validate weight parsing to avoid NaN
+      const parsedWeight = weight ? parseFloat(weight) : null;
+      const validWeight = parsedWeight !== null && !isNaN(parsedWeight) ? parsedWeight : null;
+
+      // Save to SQLite
       const dateStr = new Date().toISOString().split('T')[0];
       await saveLogEntry({
         timestamp: new Date().toISOString(),
@@ -136,13 +144,19 @@ export default function LogScreen(): JSX.Element {
         protein_g: analysis.protein_g,
         carbs_g: analysis.carbs_g,
         fat_g: analysis.fat_g,
-        weight_kg: weight ? parseFloat(weight) : null,
+        weight_kg: validWeight,
         workout_notes: workout || null,
         wind_down: windDown || null,
         ai_feedback: analysis.feedback,
         meal_photo_uri: savedMealUri,
         progress_photo_uri: savedProgressUri,
       });
+
+      // Reset form fields on success
+      setMealPhoto(null);
+      setProgressPhoto(null);
+      setWorkout('');
+      setWindDown('');
 
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       Alert.alert('Logged Successfully! 🔥', `Estimated ${analysis.calories} calories saved.`);
@@ -154,7 +168,11 @@ export default function LogScreen(): JSX.Element {
   };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content} testID="log-screen-scroll">
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={[styles.content, { paddingTop: insets.top + 10 }]}
+      testID="log-screen-scroll"
+    >
       <Text style={styles.brandTitle}>FUEL 🔥</Text>
       <Text style={styles.brandSubtitle}>Scan · Analyze · Transform</Text>
 
@@ -291,7 +309,7 @@ export default function LogScreen(): JSX.Element {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
-  content: { padding: 20, paddingTop: 40, paddingBottom: 60 },
+  content: { padding: 20, paddingBottom: 60 },
   brandTitle: { fontSize: 32, fontWeight: '800', color: COLORS.text, marginBottom: 2 },
   brandSubtitle: { fontSize: 14, color: COLORS.textSecondary, marginBottom: 20 },
   photoRow: { flexDirection: 'row', gap: 12, marginBottom: 10 },
