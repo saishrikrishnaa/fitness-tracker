@@ -66,6 +66,11 @@ jest.mock('expo-haptics', () => ({
 jest.mock('expo-router', () => {
   const mockReact = require('react');
   return {
+    useFocusEffect: (cb: any) => {
+      mockReact.useEffect(() => {
+        if (typeof cb === 'function') cb();
+      }, [cb]);
+    },
     Tabs: Object.assign(
       (props: any) => mockReact.createElement('Tabs', props, props.children),
       {

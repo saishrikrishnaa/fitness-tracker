@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState } from 'react';
+﻿import React, { useState, useCallback, useMemo } from 'react';
 import {
   ScrollView,
   View,
@@ -7,6 +7,7 @@ import {
   RefreshControl,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from 'expo-router';
 import { GlassCard } from '../../components/GlassCard';
 import { COLORS } from '../../constants/theme';
 import { FitnessLogEntry } from '../../types/fitness';
@@ -81,18 +82,20 @@ export default function AnalyticsScreen(): JSX.Element {
   const [logs, setLogs] = useState<FitnessLogEntry[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       const data = await getLogEntries();
       setLogs(data);
     } catch {
       // Gracefully retain existing state on error
     }
-  };
-
-  useEffect(() => {
-    loadData();
   }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [loadData])
+  );
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -100,9 +103,12 @@ export default function AnalyticsScreen(): JSX.Element {
     setRefreshing(false);
   };
 
-  const avgCalories = calculateDailyAverages(logs);
-  const streak = calculateStreak(logs);
-  const latestWeight = logs.find((l) => l.weight_kg !== null && l.weight_kg !== undefined)?.weight_kg;
+  const avgCalories = useMemo(() => calculateDailyAverages(logs), [logs]);
+  const streak = useMemo(() => calculateStreak(logs), [logs]);
+  const latestWeight = useMemo(
+    () => logs.find((l) => l.weight_kg !== null && l.weight_kg !== undefined)?.weight_kg,
+    [logs]
+  );
 
   return (
     <ScrollView

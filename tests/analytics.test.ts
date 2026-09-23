@@ -17,6 +17,15 @@ jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 44, bottom: 34, left: 0, right: 0 }),
 }));
 
+jest.mock('expo-router', () => ({
+  useFocusEffect: (cb: any) => {
+    const mockReact = require('react');
+    mockReact.useEffect(() => {
+      if (typeof cb === 'function') cb();
+    }, [cb]);
+  },
+}));
+
 jest.mock('expo-sqlite', () => ({
   openDatabaseAsync: jest.fn().mockImplementation(() =>
     Promise.resolve({
