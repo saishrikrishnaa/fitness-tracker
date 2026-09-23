@@ -16,6 +16,11 @@ jest.mock('react-native', () => {
     Alert: {
       alert: jest.fn(),
     },
+    Dimensions: {
+      get: () => ({ width: 390, height: 844 }),
+    },
+    FlatList: (props: any) => mockReact.createElement('FlatList', props, props.children),
+    RefreshControl: (props: any) => mockReact.createElement('RefreshControl', props, props.children),
   };
 });
 
@@ -80,6 +85,16 @@ jest.mock('expo-router', () => {
   };
 });
 
+jest.mock('expo-local-authentication', () => ({
+  hasHardwareAsync: jest.fn(async () => true),
+  isEnrolledAsync: jest.fn(async () => true),
+  authenticateAsync: jest.fn(async () => ({ success: true })),
+  AuthenticationType: {
+    FINGERPRINT: 1,
+    FACIAL_RECOGNITION: 2,
+  },
+}));
+
 jest.mock('lucide-react-native', () => ({
   Utensils: () => null,
   BarChart3: () => null,
@@ -89,6 +104,18 @@ jest.mock('lucide-react-native', () => ({
   ImagePlus: () => null,
   Zap: () => null,
   Image: () => null,
+  Lock: () => null,
+  Unlock: () => null,
+  Fingerprint: () => null,
+  Delete: () => null,
+  Scale: () => null,
+  Calendar: () => null,
+  Key: () => null,
+  Shield: () => null,
+  Eye: () => null,
+  EyeOff: () => null,
+  Save: () => null,
+  CheckCircle: () => null,
 }));
 
 import { GlassCard } from '../components/GlassCard';
