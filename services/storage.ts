@@ -8,7 +8,8 @@ export async function savePhotoLocally(tempUri: string, folder: 'meals' | 'progr
   }
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const filename = `${folder}_${timestamp}.jpg`;
+  const uniqueSuffix = Math.random().toString(36).substring(2, 7);
+  const filename = `${folder}_${timestamp}_${uniqueSuffix}.jpg`;
   const destUri = `${dir}${filename}`;
 
   await FileSystem.copyAsync({

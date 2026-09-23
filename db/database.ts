@@ -1,14 +1,17 @@
 import * as SQLite from 'expo-sqlite';
 import { FitnessLogEntry, NewFitnessLog } from '../types/fitness';
 
-let dbInstance: SQLite.SQLiteDatabase | null = null;
+let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
-export async function getDb(): Promise<SQLite.SQLiteDatabase> {
-  if (!dbInstance) {
-    dbInstance = await SQLite.openDatabaseAsync('fuel_fitness.db');
-    await initDatabase(dbInstance);
+export function getDb(): Promise<SQLite.SQLiteDatabase> {
+  if (!dbPromise) {
+    dbPromise = (async () => {
+      const db = await SQLite.openDatabaseAsync('fuel_fitness.db');
+      await initDatabase(db);
+      return db;
+    })();
   }
-  return dbInstance;
+  return dbPromise;
 }
 
 export async function initDatabase(db: SQLite.SQLiteDatabase): Promise<void> {
@@ -53,7 +56,14 @@ export function formatLogForStorage(entry: NewFitnessLog) {
 export function parseDbRowToLog(row: any): FitnessLogEntry {
   let feedback: string[] = [];
   try {
-    feedback = typeof row.ai_feedback === 'string' ? JSON.parse(row.ai_feedback) : [];
+    if (typeof row.ai_feedback === 'string') {
+      const parsed = JSON.parse(row.ai_feedback);
+      feedback = Array.isArray(parsed) ? parsed : [];
+    } else if (Array.isArray(row.ai_feedback)) {
+      feedback = row.ai_feedback;
+    } else {
+      feedback = [];
+    }
   } catch {
     feedback = [];
   }

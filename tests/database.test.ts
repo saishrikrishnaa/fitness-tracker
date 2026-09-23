@@ -97,6 +97,28 @@ describe('Database Formatting Helpers', () => {
     expect(parsed.weight_kg).toBeNull();
     expect(parsed.created_at).toBe('2026-09-23T12:00:00Z');
   });
+
+  it('safely handles non-array JSON object in ai_feedback', () => {
+    const row = {
+      id: 3,
+      timestamp: '2026-09-23T12:00:00Z',
+      date: '2026-09-23',
+      meal_type: 'Dinner',
+      calories: 500,
+      protein_g: 30,
+      carbs_g: 40,
+      fat_g: 10,
+      weight_kg: null,
+      workout_notes: null,
+      wind_down: null,
+      ai_feedback: '{"someKey": "someValue"}',
+      meal_photo_uri: null,
+      progress_photo_uri: null,
+    };
+
+    const parsed = parseDbRowToLog(row);
+    expect(parsed.ai_feedback).toEqual([]);
+  });
 });
 
 describe('Database Operations', () => {
@@ -114,6 +136,12 @@ describe('Database Operations', () => {
     expect(query).toContain('CREATE TABLE IF NOT EXISTS fitness_logs');
     expect(query).toContain('CREATE TABLE IF NOT EXISTS user_settings');
     expect(query).toContain('CREATE INDEX IF NOT EXISTS idx_logs_date');
+  });
+
+  it('handles concurrent getDb calls returning the same singleton promise', async () => {
+    const [db1, db2] = await Promise.all([getDb(), getDb()]);
+    expect(db1).toBe(mockDb);
+    expect(db2).toBe(mockDb);
   });
 
   it('saves a log entry and returns the inserted row id', async () => {
@@ -198,7 +226,7 @@ describe('Photo Storage Service', () => {
     jest.clearAllMocks();
   });
 
-  it('creates directory if not exists and copies photo locally', async () => {
+  it('creates directory if not exists and copies photo locally with unique suffix', async () => {
     (FileSystem.getInfoAsync as jest.Mock).mockResolvedValue({ exists: false });
     (FileSystem.makeDirectoryAsync as jest.Mock).mockResolvedValue(undefined);
     (FileSystem.copyAsync as jest.Mock).mockResolvedValue(undefined);
@@ -214,9 +242,9 @@ describe('Photo Storage Service', () => {
     );
     expect(FileSystem.copyAsync).toHaveBeenCalledWith({
       from: 'file:///temp/camera.jpg',
-      to: expect.stringMatching(/^file:\/\/\/data\/user\/0\/host\.exp\.exponent\/files\/fuel_media\/meals\/meals_.*\.jpg$/),
+      to: expect.stringMatching(/^file:\/\/\/data\/user\/0\/host\.exp\.exponent\/files\/fuel_media\/meals\/meals_.*_[a-z0-9]+\.jpg$/),
     });
-    expect(dest).toMatch(/^file:\/\/\/data\/user\/0\/host\.exp\.exponent\/files\/fuel_media\/meals\/meals_.*\.jpg$/);
+    expect(dest).toMatch(/^file:\/\/\/data\/user\/0\/host\.exp\.exponent\/files\/fuel_media\/meals\/meals_.*_[a-z0-9]+\.jpg$/);
   });
 
   it('skips directory creation if directory already exists', async () => {
@@ -228,7 +256,7 @@ describe('Photo Storage Service', () => {
     expect(FileSystem.makeDirectoryAsync).not.toHaveBeenCalled();
     expect(FileSystem.copyAsync).toHaveBeenCalledWith({
       from: 'file:///temp/camera.jpg',
-      to: expect.stringMatching(/progress_.*\.jpg$/),
+      to: expect.stringMatching(/progress_.*_[a-z0-9]+\.jpg$/),
     });
   });
 });
