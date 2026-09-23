@@ -20,6 +20,7 @@ jest.mock('react-native', () => {
     Dimensions: {
       get: () => ({ width: 390, height: 844 }),
     },
+    useWindowDimensions: () => ({ width: 390, height: 844 }),
     RefreshControl: (props: any) => mockReact.createElement('RefreshControl', props, props.children),
   };
 });

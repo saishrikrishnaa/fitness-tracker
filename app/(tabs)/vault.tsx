@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -7,7 +7,7 @@ import {
   FlatList,
   Image,
   RefreshControl,
-  Dimensions,
+  useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
@@ -20,17 +20,19 @@ import { FitnessLogEntry } from '../../types/fitness';
 import { getProgressPhotos } from '../../db/database';
 import { getVaultPin } from '../../services/secureStore';
 
-const windowWidth = Dimensions?.get ? (Dimensions.get('window')?.width ?? 390) : 390;
-const COLUMN_WIDTH = (windowWidth - 48) / 2;
-
 export default function VaultScreen(): JSX.Element {
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
+  const columnWidth = (width - 52) / 2;
+
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [pin, setPin] = useState('');
   const [storedPin, setStoredPin] = useState('1234');
   const [photos, setPhotos] = useState<FitnessLogEntry[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadStoredPin = useCallback(async () => {
     try {
@@ -54,6 +56,14 @@ export default function VaultScreen(): JSX.Element {
     loadStoredPin();
   }, [loadStoredPin]);
 
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+      }
+    };
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       loadStoredPin();
@@ -64,6 +74,9 @@ export default function VaultScreen(): JSX.Element {
   );
 
   const unlockVault = async () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+    }
     try {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch {}
@@ -90,7 +103,10 @@ export default function VaultScreen(): JSX.Element {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         } catch {}
         setErrorMessage('Incorrect PIN. Try again.');
-        setTimeout(() => {
+        if (timerRef.current) {
+          clearTimeout(timerRef.current);
+        }
+        timerRef.current = setTimeout(() => {
           setPin('');
         }, 500);
       }
@@ -134,6 +150,9 @@ export default function VaultScreen(): JSX.Element {
   };
 
   const handleLock = async () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+    }
     try {
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     } catch {}
@@ -150,15 +169,15 @@ export default function VaultScreen(): JSX.Element {
 
   const renderPhotoItem = ({ item }: { item: FitnessLogEntry }) => {
     return (
-      <GlassCard style={styles.photoCard}>
+      <GlassCard style={[styles.photoCard, { width: columnWidth }]}>
         {item.progress_photo_uri ? (
           <Image
             source={{ uri: item.progress_photo_uri }}
-            style={styles.photoImage}
+            style={[styles.photoImage, { height: columnWidth * 1.25 }]}
             resizeMode="cover"
           />
         ) : (
-          <View style={styles.photoPlaceholder}>
+          <View style={[styles.photoPlaceholder, { height: columnWidth * 1.25 }]}>
             <ImageIcon color={COLORS.textMuted} size={32} />
           </View>
         )}
@@ -275,7 +294,7 @@ export default function VaultScreen(): JSX.Element {
 
       <FlatList
         data={photos}
-        keyExtractor={(item) => String(item.id)}
+        keyExtractor={toStringId}
         renderItem={renderPhotoItem}
         numColumns={2}
         columnWrapperStyle={styles.columnWrapper}
@@ -302,6 +321,10 @@ export default function VaultScreen(): JSX.Element {
       />
     </View>
   );
+}
+
+function toStringId(item: FitnessLogEntry): string {
+  return String(item.id);
 }
 
 const styles = StyleSheet.create({
@@ -433,21 +456,18 @@ const styles = StyleSheet.create({
     paddingBottom: 40,
   },
   photoCard: {
-    width: COLUMN_WIDTH,
     padding: 0,
     overflow: 'hidden',
     borderRadius: 14,
   },
   photoImage: {
     width: '100%',
-    height: COLUMN_WIDTH * 1.25,
     borderTopLeftRadius: 14,
     borderTopRightRadius: 14,
     backgroundColor: 'rgba(0,0,0,0.3)',
   },
   photoPlaceholder: {
     width: '100%',
-    height: COLUMN_WIDTH * 1.25,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: 'rgba(255, 255, 255, 0.03)',
