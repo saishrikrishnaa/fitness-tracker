@@ -1,0 +1,160 @@
+﻿import { parseGeminiResponse, analyzeMealImageOnDevice } from '../services/gemini';
+import { getApiKey, setApiKey, getVaultPin, setVaultPin } from '../services/secureStore';
+import * as SecureStore from 'expo-secure-store';
+import * as FileSystem from 'expo-file-system';
+
+jest.mock('expo-secure-store', () => {
+  const store = new Map<string, string>();
+  return {
+    getItemAsync: jest.fn(async (key: string) => store.get(key) || null),
+    setItemAsync: jest.fn(async (key: string, value: string) => {
+      store.set(key, value);
+    }),
+    deleteItemAsync: jest.fn(async (key: string) => {
+      store.delete(key);
+    }),
+    __store: store,
+  };
+});
+
+jest.mock('expo-file-system', () => ({
+  readAsStringAsync: jest.fn(async () => 'base64sampledata'),
+  EncodingType: {
+    Base64: 'base64',
+  },
+}));
+
+describe('Gemini Response Parser', () => {
+  it('parses valid structured JSON output correctly', () => {
+    const rawJson = JSON.stringify({
+      calories: 620,
+      protein_g: 48,
+      carbs_g: 60,
+      fat_g: 18,
+      feedback: ['✅ Great post-workout protein source', '⚠️ High in sodium', '💡 Drink extra water'],
+    });
+
+    const parsed = parseGeminiResponse(rawJson);
+    expect(parsed).toEqual({
+      calories: 620,
+      protein_g: 48,
+      carbs_g: 60,
+      fat_g: 18,
+      feedback: ['✅ Great post-workout protein source', '⚠️ High in sodium', '💡 Drink extra water'],
+    });
+  });
+
+  it('handles markdown codeblocks wrapping json', () => {
+    const rawJson = '```json\n{"calories": 400, "protein_g": 30, "carbs_g": 40, "fat_g": 10, "feedback": ["✅ Good balance"]}\n```';
+    const parsed = parseGeminiResponse(rawJson);
+    expect(parsed).toEqual({
+      calories: 400,
+      protein_g: 30,
+      carbs_g: 40,
+      fat_g: 10,
+      feedback: ['✅ Good balance'],
+    });
+  });
+
+  it('falls back gracefully on invalid JSON', () => {
+    const parsed = parseGeminiResponse('invalid non-json response');
+    expect(parsed).toBeNull();
+  });
+});
+
+describe('Secure Store Service', () => {
+  beforeEach(() => {
+    (SecureStore as any).__store.clear();
+    jest.clearAllMocks();
+  });
+
+  it('gets and sets API key', async () => {
+    expect(await getApiKey()).toBeNull();
+    await setApiKey('test-gemini-key-123');
+    expect(await getApiKey()).toBe('test-gemini-key-123');
+  });
+
+  it('gets default vault pin and updates pin', async () => {
+    expect(await getVaultPin()).toBe('1234');
+    await setVaultPin('9876');
+    expect(await getVaultPin()).toBe('9876');
+  });
+});
+
+describe('analyzeMealImageOnDevice', () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    (SecureStore as any).__store.clear();
+    jest.clearAllMocks();
+  });
+
+  afterAll(() => {
+    global.fetch = originalFetch;
+  });
+
+  it('throws error when API key is missing', async () => {
+    await expect(analyzeMealImageOnDevice('file:///image.jpg', 'Breakfast')).rejects.toThrow(
+      'Missing Gemini API Key. Please configure it in Settings.'
+    );
+  });
+
+  it('calls Gemini API and returns parsed meal analysis', async () => {
+    await setApiKey('test-key');
+
+    const mockResponsePayload = {
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                text: JSON.stringify({
+                  calories: 550,
+                  protein_g: 35,
+                  carbs_g: 50,
+                  fat_g: 15,
+                  feedback: ['✅ High protein', '⚠️ Moderate carbs', '💡 Hydrate'],
+                }),
+              },
+            ],
+          },
+        },
+      ],
+    };
+
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => mockResponsePayload,
+    } as any);
+
+    const result = await analyzeMealImageOnDevice('file:///image.jpg', 'Lunch', 'Upper body workout');
+    expect(result).toEqual({
+      calories: 550,
+      protein_g: 35,
+      carbs_g: 50,
+      fat_g: 15,
+      feedback: ['✅ High protein', '⚠️ Moderate carbs', '💡 Hydrate'],
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('gemini-2.5-pro:generateContent?key=test-key'),
+      expect.objectContaining({
+        method: 'POST',
+      })
+    );
+  });
+
+  it('throws error when Gemini API response is not ok', async () => {
+    await setApiKey('test-key');
+
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => 'Bad Request: API key invalid',
+    } as any);
+
+    await expect(analyzeMealImageOnDevice('file:///image.jpg', 'Dinner')).rejects.toThrow(
+      'Gemini API Error: 400 - Bad Request: API key invalid'
+    );
+  });
+});
