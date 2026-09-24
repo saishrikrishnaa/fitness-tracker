@@ -4,9 +4,27 @@
     "slug": "fuel-fitness",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "scheme": "fuel",
+    "android": {
+      "package": "com.fuel.fitness",
+      "adaptiveIcon": {
+        "backgroundColor": "#0D0D0D"
+      },
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT"
+      ]
+    },
+    "ios": {
+      "bundleIdentifier": "com.fuel.fitness"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
     "plugins": [
       "expo-router",
       [
@@ -20,7 +38,14 @@
         {
           "faceIDPermission": "Allow FUEL to use FaceID to unlock the Progress Vault."
         }
-      ]
-    ]
+      ],
+      "expo-sqlite"
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "352452b7-43f3-473b-a16e-5836f6c5b8f4"
+      }
+    }
   }
 }
