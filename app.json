@@ -39,7 +39,8 @@
           "faceIDPermission": "Allow FUEL to use FaceID to unlock the Progress Vault."
         }
       ],
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-asset"
     ],
     "extra": {
       "router": {},
