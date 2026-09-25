@@ -38,6 +38,14 @@
 ## 4. How to Launch and Test on Mobile
 To start the Expo development server:
 ```bash
-npx.cmd expo start
+npx expo start
 ```
 Open **Expo Go** on your iOS or Android device and scan the QR code displayed in the terminal.
+
+---
+
+## 5. Standalone Production / Preview APK Build
+- **Build Service:** Expo Application Services (EAS Build)
+- **Profile:** `preview` (standalone installable Android `.apk`)
+- **Status:** 🟢 **Build Passed & Ready for Installation**
+- **Download / Install Link:** [https://expo.dev/accounts/krishnaa10/projects/fuel-fitness/builds/9635dd49-824d-4587-85ea-398f103ad953](https://expo.dev/accounts/krishnaa10/projects/fuel-fitness/builds/9635dd49-824d-4587-85ea-398f103ad953)
