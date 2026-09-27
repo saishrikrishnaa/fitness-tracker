@@ -48,4 +48,5 @@ Open **Expo Go** on your iOS or Android device and scan the QR code displayed in
 - **Build Service:** Expo Application Services (EAS Build)
 - **Profile:** `preview` (standalone installable Android `.apk`)
 - **Status:** 🟢 **Build Passed & Ready for Installation**
-- **Download / Install Link:** [https://expo.dev/accounts/krishnaa10/projects/fuel-fitness/builds/9635dd49-824d-4587-85ea-398f103ad953](https://expo.dev/accounts/krishnaa10/projects/fuel-fitness/builds/9635dd49-824d-4587-85ea-398f103ad953)
+- **Download / Install Link:** [https://expo.dev/accounts/krishnaa10/projects/fuel-fitness/builds/5c46db1e-37a8-49bc-916d-0df1242f9d7d](https://expo.dev/accounts/krishnaa10/projects/fuel-fitness/builds/5c46db1e-37a8-49bc-916d-0df1242f9d7d)
+- **Includes Fix:** Official `gemini-1.5-flash` multimodal vision endpoint integration.
