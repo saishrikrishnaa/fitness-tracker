@@ -1,4 +1,4 @@
-﻿import { parseGeminiResponse, analyzeMealImageOnDevice, getMimeType } from '../services/gemini';
+import { parseGeminiResponse, analyzeMealImageOnDevice, getMimeType } from '../services/gemini';
 import { getApiKey, setApiKey, getVaultPin, setVaultPin } from '../services/secureStore';
 import * as SecureStore from 'expo-secure-store';
 import * as FileSystem from 'expo-file-system';
@@ -147,7 +147,7 @@ describe('analyzeMealImageOnDevice', () => {
     });
 
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('gemini-2.5-pro:generateContent?key=test-key'),
+      expect.stringContaining('gemini-1.5-flash:generateContent?key=test-key'),
       expect.objectContaining({
         method: 'POST',
         body: expect.stringContaining('"mime_type":"image/png"'),

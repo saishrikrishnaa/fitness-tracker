@@ -1,4 +1,4 @@
-﻿import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system';
 import { getApiKey } from './secureStore';
 
 export interface MealAnalysisResult {
@@ -62,7 +62,7 @@ export async function analyzeMealImageOnDevice(
   }
   `;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
   const mimeType = getMimeType(imageUri);
   const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(30000) : undefined;
 
