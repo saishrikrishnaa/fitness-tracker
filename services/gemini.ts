@@ -33,6 +33,42 @@ export function parseGeminiResponse(jsonText: string): MealAnalysisResult | null
   }
 }
 
+export const FALLBACK_MODELS = [
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
+  'gemini-1.5-flash-latest',
+  'gemini-1.5-pro',
+  'gemini-pro',
+];
+
+export async function getAvailableGeminiModels(apiKey: string): Promise<string[]> {
+  try {
+    const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(10000) : undefined;
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`, { signal });
+    if (!res.ok) return FALLBACK_MODELS;
+    
+    const data = await res.json();
+    if (!Array.isArray(data.models)) return FALLBACK_MODELS;
+
+    const available = data.models
+      .filter((m: any) => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'))
+      .map((m: any) => m.name.replace(/^models\//, ''))
+      .filter((name: string) => name.toLowerCase().includes('gemini'));
+
+    // Sort to prioritize flash models first, then pro models
+    available.sort((a: string, b: string) => {
+      const aScore = a.includes('flash') ? 2 : a.includes('pro') ? 1 : 0;
+      const bScore = b.includes('flash') ? 2 : b.includes('pro') ? 1 : 0;
+      return bScore - aScore;
+    });
+
+    return available.length > 0 ? available : FALLBACK_MODELS;
+  } catch {
+    return FALLBACK_MODELS;
+  }
+}
+
 export async function analyzeMealImageOnDevice(
   imageUri: string,
   mealType: string,
@@ -62,42 +98,64 @@ export async function analyzeMealImageOnDevice(
   }
   `;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
   const mimeType = getMimeType(imageUri);
-  const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(30000) : undefined;
+  const modelsToTry = await getAvailableGeminiModels(apiKey);
+  
+  let lastError: Error | null = null;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    signal,
-    body: JSON.stringify({
-      contents: [
-        {
-          parts: [
-            { text: prompt },
+  for (const model of modelsToTry) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(30000) : undefined;
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal,
+        body: JSON.stringify({
+          contents: [
             {
-              inline_data: {
-                mime_type: mimeType,
-                data: base64Image,
-              },
+              parts: [
+                { text: prompt },
+                {
+                  inline_data: {
+                    mime_type: mimeType,
+                    data: base64Image,
+                  },
+                },
+              ],
             },
           ],
-        },
-      ],
-      generationConfig: {
-        response_mime_type: 'application/json',
-      },
-    }),
-  });
+          generationConfig: {
+            response_mime_type: 'application/json',
+          },
+        }),
+      });
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Gemini API Error: ${response.status} - ${errText}`);
+      if (!response.ok) {
+        const errText = await response.text();
+        // If model not found (404), continue to next available model in the list
+        if (response.status === 404 || errText.toLowerCase().includes('not found') || errText.toLowerCase().includes('not supported')) {
+          lastError = new Error(`Gemini Model ${model} not supported: ${errText}`);
+          continue;
+        }
+        throw new Error(`Gemini API Error: ${response.status} - ${errText}`);
+      }
+
+      const data = await response.json();
+      const textContent = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!textContent) return null;
+
+      return parseGeminiResponse(textContent);
+    } catch (err: any) {
+      lastError = err;
+      // Only retry if it's a model-not-found error, otherwise propagate
+      if (err.message?.includes('not supported') || err.message?.includes('404')) {
+        continue;
+      }
+      throw err;
+    }
   }
 
-  const data = await response.json();
-  const textContent = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!textContent) return null;
-
-  return parseGeminiResponse(textContent);
+  throw lastError || new Error('All Gemini model candidates failed. Please verify your API key.');
 }

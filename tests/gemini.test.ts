@@ -109,8 +109,17 @@ describe('analyzeMealImageOnDevice', () => {
     );
   });
 
-  it('calls Gemini API and returns parsed meal analysis with correct MIME type', async () => {
+  it('calls Gemini API with dynamic model and returns parsed meal analysis', async () => {
     await setApiKey('test-key');
+
+    const mockModelsPayload = {
+      models: [
+        {
+          name: 'models/gemini-2.5-flash',
+          supportedGenerationMethods: ['generateContent'],
+        },
+      ],
+    };
 
     const mockResponsePayload = {
       candidates: [
@@ -132,10 +141,18 @@ describe('analyzeMealImageOnDevice', () => {
       ],
     };
 
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      json: async () => mockResponsePayload,
-    } as any);
+    global.fetch = jest.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/models?')) {
+        return {
+          ok: true,
+          json: async () => mockModelsPayload,
+        };
+      }
+      return {
+        ok: true,
+        json: async () => mockResponsePayload,
+      };
+    });
 
     const result = await analyzeMealImageOnDevice('file:///image.png', 'Lunch', 'Upper body workout');
     expect(result).toEqual({
@@ -147,7 +164,7 @@ describe('analyzeMealImageOnDevice', () => {
     });
 
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('gemini-1.5-flash:generateContent?key=test-key'),
+      expect.stringContaining('gemini-2.5-flash:generateContent?key=test-key'),
       expect.objectContaining({
         method: 'POST',
         body: expect.stringContaining('"mime_type":"image/png"'),
@@ -155,14 +172,65 @@ describe('analyzeMealImageOnDevice', () => {
     );
   });
 
-  it('throws error when Gemini API response is not ok', async () => {
+  it('cascades to next available model when a candidate returns 404 / not supported', async () => {
     await setApiKey('test-key');
 
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: false,
-      status: 400,
-      text: async () => 'Bad Request: API key invalid',
-    } as any);
+    const mockResponsePayload = {
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                text: JSON.stringify({
+                  calories: 400,
+                  protein_g: 30,
+                  carbs_g: 45,
+                  fat_g: 12,
+                  feedback: ['✅ Great meal', '⚠️ Keep going', '💡 Good hydration'],
+                }),
+              },
+            ],
+          },
+        },
+      ],
+    };
+
+    global.fetch = jest.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/models?')) {
+        return { ok: false }; // fallback to default candidate list
+      }
+      if (url.includes('gemini-2.5-flash:generateContent')) {
+        return {
+          ok: false,
+          status: 404,
+          text: async () => 'models/gemini-2.5-flash is not found',
+        };
+      }
+      return {
+        ok: true,
+        json: async () => mockResponsePayload,
+      };
+    });
+
+    const result = await analyzeMealImageOnDevice('file:///image.jpg', 'Dinner');
+    expect(result?.calories).toBe(400);
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('gemini-2.0-flash:generateContent?key=test-key'),
+      expect.anything()
+    );
+  });
+
+  it('throws error when Gemini API response is not ok and not 404', async () => {
+    await setApiKey('test-key');
+
+    global.fetch = jest.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/models?')) return { ok: false };
+      return {
+        ok: false,
+        status: 400,
+        text: async () => 'Bad Request: API key invalid',
+      };
+    });
 
     await expect(analyzeMealImageOnDevice('file:///image.jpg', 'Dinner')).rejects.toThrow(
       'Gemini API Error: 400 - Bad Request: API key invalid'
