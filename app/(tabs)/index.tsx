@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import {
   ScrollView,
   View,
@@ -18,7 +18,7 @@ import { GlassCard } from '../../components/GlassCard';
 import { MacroBar } from '../../components/MacroBar';
 import { COLORS } from '../../constants/theme';
 import { MealType } from '../../types/fitness';
-import { analyzeMealImageOnDevice, MealAnalysisResult } from '../../services/gemini';
+import { analyzeMeal, analyzeMealImageOnDevice, MealAnalysisResult } from '../../services/gemini';
 import { savePhotoLocally } from '../../services/storage';
 import { saveLogEntry } from '../../db/database';
 
@@ -27,6 +27,7 @@ export const MEAL_TYPES: MealType[] = ['Breakfast', 'Lunch', 'Dinner', 'Snack'];
 export default function LogScreen(): JSX.Element {
   const insets = useSafeAreaInsets();
   const [mealPhoto, setMealPhoto] = useState<string | null>(null);
+  const [mealDescription, setMealDescription] = useState('');
   const [progressPhoto, setProgressPhoto] = useState<string | null>(null);
   const [mealType, setMealType] = useState<MealType>('Lunch');
   const [weight, setWeight] = useState('70.0');
@@ -106,8 +107,11 @@ export default function LogScreen(): JSX.Element {
   };
 
   const handleAnalyzeAndLog = async () => {
-    if (!mealPhoto) {
-      Alert.alert('Meal Photo Required', 'Please snap a photo of your meal first!');
+    const hasPhoto = Boolean(mealPhoto);
+    const hasDesc = Boolean(mealDescription && mealDescription.trim().length > 0);
+
+    if (!hasPhoto && !hasDesc) {
+      Alert.alert('Meal Info Required', 'Please snap a photo or describe your meal to analyze!');
       return;
     }
 
@@ -115,7 +119,13 @@ export default function LogScreen(): JSX.Element {
       setAnalyzing(true);
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
 
-      const analysis = await analyzeMealImageOnDevice(mealPhoto, mealType, workout);
+      const analysis = await analyzeMeal({
+        imageUri: mealPhoto,
+        mealDescription: mealDescription.trim(),
+        mealType,
+        workoutNotes: workout,
+      });
+
       if (!analysis) {
         Alert.alert('Analysis Failed', 'Could not parse meal nutrients.');
         setAnalyzing(false);
@@ -124,8 +134,8 @@ export default function LogScreen(): JSX.Element {
 
       setAiResult(analysis);
 
-      // Save photos locally
-      const savedMealUri = await savePhotoLocally(mealPhoto, 'meals');
+      // Save photos locally if available
+      const savedMealUri = mealPhoto ? await savePhotoLocally(mealPhoto, 'meals') : null;
       const savedProgressUri = progressPhoto
         ? await savePhotoLocally(progressPhoto, 'progress')
         : null;
@@ -154,6 +164,7 @@ export default function LogScreen(): JSX.Element {
 
       // Reset form fields on success
       setMealPhoto(null);
+      setMealDescription('');
       setProgressPhoto(null);
       setWorkout('');
       setWindDown('');
@@ -174,7 +185,7 @@ export default function LogScreen(): JSX.Element {
       testID="log-screen-scroll"
     >
       <Text style={styles.brandTitle}>FUEL 🔥</Text>
-      <Text style={styles.brandSubtitle}>Scan · Analyze · Transform</Text>
+      <Text style={styles.brandSubtitle}>Scan · Describe · Analyze · Transform</Text>
 
       {/* Photo Capture Slots */}
       <View style={styles.photoRow}>
@@ -188,7 +199,7 @@ export default function LogScreen(): JSX.Element {
           ) : (
             <View style={styles.photoPlaceholder}>
               <Camera color={COLORS.primary} size={32} />
-              <Text style={styles.photoText}>Scan Meal *</Text>
+              <Text style={styles.photoText}>Scan Meal</Text>
             </View>
           )}
         </TouchableOpacity>
@@ -221,7 +232,7 @@ export default function LogScreen(): JSX.Element {
         </TouchableOpacity>
       </View>
 
-      {/* Meal Type Pills */}
+      {/* Meal Type & Details Card */}
       <GlassCard>
         <Text style={styles.sectionHeader}>Meal Type</Text>
         <View style={styles.pillsRow}>
@@ -236,6 +247,19 @@ export default function LogScreen(): JSX.Element {
             </TouchableOpacity>
           ))}
         </View>
+
+        {/* Meal Description Input */}
+        <Text style={styles.inputLabel}>Describe Meal / Food Items</Text>
+        <TextInput
+          style={[styles.input, styles.textArea]}
+          value={mealDescription}
+          onChangeText={setMealDescription}
+          placeholder="e.g. 2 eggs, 1 slice sourdough toast, avocado, black coffee..."
+          placeholderTextColor={COLORS.textMuted}
+          multiline
+          numberOfLines={3}
+          testID="meal-description-input"
+        />
 
         {/* Inputs */}
         <Text style={styles.inputLabel}>Body Weight (kg)</Text>
@@ -349,6 +373,10 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     padding: 12,
     fontSize: 14,
+  },
+  textArea: {
+    minHeight: 70,
+    textAlignVertical: 'top',
   },
   actionBtn: {
     backgroundColor: COLORS.primary,

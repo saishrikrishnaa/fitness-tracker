@@ -33,74 +33,130 @@ export function parseGeminiResponse(jsonText: string): MealAnalysisResult | null
   }
 }
 
-export const FALLBACK_MODELS = [
-  'gemini-2.5-flash',
-  'gemini-2.0-flash',
+export const VISION_MODELS = [
   'gemini-1.5-flash',
   'gemini-1.5-flash-latest',
   'gemini-1.5-pro',
+  'gemini-2.0-flash',
+  'gemini-1.5-flash-8b',
+];
+
+export const TEXT_MODELS = [
+  'gemini-1.5-flash',
+  'gemini-1.5-flash-latest',
+  'gemini-1.5-pro',
+  'gemini-2.0-flash',
   'gemini-pro',
 ];
 
-export async function getAvailableGeminiModels(apiKey: string): Promise<string[]> {
+export const FALLBACK_MODELS = VISION_MODELS;
+
+export async function getAvailableGeminiModels(
+  apiKey: string,
+  requiresImage: boolean = false
+): Promise<string[]> {
   try {
-    const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(10000) : undefined;
+    const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(8000) : undefined;
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`, { signal });
-    if (!res.ok) return FALLBACK_MODELS;
-    
+    if (!res.ok) return requiresImage ? VISION_MODELS : TEXT_MODELS;
+
     const data = await res.json();
-    if (!Array.isArray(data.models)) return FALLBACK_MODELS;
+    if (!Array.isArray(data.models)) return requiresImage ? VISION_MODELS : TEXT_MODELS;
 
     const available = data.models
       .filter((m: any) => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'))
       .map((m: any) => m.name.replace(/^models\//, ''))
-      .filter((name: string) => name.toLowerCase().includes('gemini'));
+      .filter((name: string) => {
+        const lower = name.toLowerCase();
+        if (!lower.includes('gemini') || lower.includes('embedding') || lower.includes('2.5')) {
+          return false;
+        }
+        if (requiresImage) {
+          // gemini-pro and gemini-1.0-pro are text-only models
+          if (lower === 'gemini-pro' || lower.includes('1.0-pro') || lower.includes('ultra')) {
+            return false;
+          }
+        }
+        return true;
+      });
 
-    // Sort to prioritize flash models first, then pro models
+    // Sort to prioritize stable 1.5-flash, then 2.0-flash, then 1.5-pro, then gemini-pro
     available.sort((a: string, b: string) => {
-      const aScore = a.includes('flash') ? 2 : a.includes('pro') ? 1 : 0;
-      const bScore = b.includes('flash') ? 2 : b.includes('pro') ? 1 : 0;
-      return bScore - aScore;
+      const getRank = (name: string) => {
+        if (name === 'gemini-1.5-flash' || name === 'gemini-1.5-flash-latest') return 10;
+        if (name.includes('1.5-flash')) return 9;
+        if (name === 'gemini-2.0-flash' || name.includes('2.0-flash')) return 8;
+        if (name.includes('1.5-pro')) return 7;
+        if (name === 'gemini-pro') return 6;
+        return 1;
+      };
+      return getRank(b) - getRank(a);
     });
 
-    return available.length > 0 ? available : FALLBACK_MODELS;
+    if (available.length > 0) return available;
+    return requiresImage ? VISION_MODELS : TEXT_MODELS;
   } catch {
-    return FALLBACK_MODELS;
+    return requiresImage ? VISION_MODELS : TEXT_MODELS;
   }
 }
 
-export async function analyzeMealImageOnDevice(
-  imageUri: string,
-  mealType: string,
-  workoutNotes?: string | null
+export interface AnalyzeMealParams {
+  imageUri?: string | null;
+  mealDescription?: string | null;
+  mealType: string;
+  workoutNotes?: string | null;
+}
+
+export async function analyzeMeal(
+  params: AnalyzeMealParams
 ): Promise<MealAnalysisResult | null> {
+  const { imageUri, mealDescription, mealType, workoutNotes } = params;
   const apiKey = await getApiKey();
   if (!apiKey) {
     throw new Error('Missing Gemini API Key. Please configure it in Settings.');
   }
 
-  const base64Image = await FileSystem.readAsStringAsync(imageUri, {
-    encoding: FileSystem.EncodingType.Base64,
-  });
+  const hasPhoto = Boolean(imageUri);
+  const hasDescription = Boolean(mealDescription && mealDescription.trim().length > 0);
+
+  if (!hasPhoto && !hasDescription) {
+    throw new Error('Please take a photo or enter a meal description to analyze.');
+  }
+
+  let base64Image: string | null = null;
+  let mimeType = 'image/jpeg';
+
+  if (imageUri) {
+    base64Image = await FileSystem.readAsStringAsync(imageUri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    mimeType = getMimeType(imageUri);
+  }
 
   const prompt = `
-  Analyze this food image. Provide estimated macronutrients and calories.
-  Context: Meal type is ${mealType}.
-  Workout context: ${workoutNotes || 'None'}.
-  
+  You are an expert sports nutritionist and physique coach.
+  Analyze the nutritional value of this meal.
+  - Meal Type: ${mealType}
+  ${hasDescription ? `- Meal Description & Ingredients: "${mealDescription?.trim()}"` : ''}
+  - Workout & Activity Context: ${workoutNotes || 'None specified'}
+
+  Provide estimated total calories and macronutrients (protein, carbs, fat in grams).
+  Provide 3 brief, actionable fitness coaching bullet points starting with emojis:
+  - First point (✅): positive nutrition highlight
+  - Second point (⚠️): macro balance or ingredient caution
+  - Third point (💡): optimization or timing tip
+
   Return strict JSON with this exact schema:
   {
     "calories": number (estimated total calories),
     "protein_g": number (grams of protein),
     "carbs_g": number (grams of carbs),
     "fat_g": number (grams of fat),
-    "feedback": [string, string, string] (3 brief actionable feedback bullet points starting with emojis ✅, ⚠️, 💡)
+    "feedback": [string, string, string]
   }
   `;
 
-  const mimeType = getMimeType(imageUri);
-  const modelsToTry = await getAvailableGeminiModels(apiKey);
-  
+  const modelsToTry = await getAvailableGeminiModels(apiKey, hasPhoto);
   let lastError: Error | null = null;
 
   for (const model of modelsToTry) {
@@ -108,24 +164,22 @@ export async function analyzeMealImageOnDevice(
     const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(30000) : undefined;
 
     try {
+      const parts: any[] = [{ text: prompt }];
+      if (base64Image) {
+        parts.push({
+          inline_data: {
+            mime_type: mimeType,
+            data: base64Image,
+          },
+        });
+      }
+
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal,
         body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { text: prompt },
-                {
-                  inline_data: {
-                    mime_type: mimeType,
-                    data: base64Image,
-                  },
-                },
-              ],
-            },
-          ],
+          contents: [{ parts }],
           generationConfig: {
             response_mime_type: 'application/json',
           },
@@ -134,12 +188,13 @@ export async function analyzeMealImageOnDevice(
 
       if (!response.ok) {
         const errText = await response.text();
-        // If model not found (404), continue to next available model in the list
-        if (response.status === 404 || errText.toLowerCase().includes('not found') || errText.toLowerCase().includes('not supported')) {
-          lastError = new Error(`Gemini Model ${model} not supported: ${errText}`);
-          continue;
+        if (errText.includes('API_KEY_INVALID') || response.status === 401) {
+          throw new Error('Invalid Gemini API Key. Please verify your API key in Settings.');
         }
-        throw new Error(`Gemini API Error: ${response.status} - ${errText}`);
+
+        // Catch image modality errors or model 404/400 and cascade
+        lastError = new Error(`Gemini ${model} error (${response.status}): ${errText}`);
+        continue;
       }
 
       const data = await response.json();
@@ -149,13 +204,24 @@ export async function analyzeMealImageOnDevice(
       return parseGeminiResponse(textContent);
     } catch (err: any) {
       lastError = err;
-      // Only retry if it's a model-not-found error, otherwise propagate
-      if (err.message?.includes('not supported') || err.message?.includes('404')) {
-        continue;
+      if (err.message?.includes('Invalid Gemini API Key')) {
+        throw err;
       }
-      throw err;
+      continue;
     }
   }
 
-  throw lastError || new Error('All Gemini model candidates failed. Please verify your API key.');
+  throw lastError || new Error('All Gemini model candidates failed. Please verify your API key in Settings.');
+}
+
+export async function analyzeMealImageOnDevice(
+  imageUri: string,
+  mealType: string,
+  workoutNotes?: string | null
+): Promise<MealAnalysisResult | null> {
+  return analyzeMeal({
+    imageUri,
+    mealType,
+    workoutNotes,
+  });
 }

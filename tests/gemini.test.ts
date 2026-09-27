@@ -1,4 +1,4 @@
-import { parseGeminiResponse, analyzeMealImageOnDevice, getMimeType } from '../services/gemini';
+import { parseGeminiResponse, analyzeMeal, analyzeMealImageOnDevice, getMimeType, getAvailableGeminiModels } from '../services/gemini';
 import { getApiKey, setApiKey, getVaultPin, setVaultPin } from '../services/secureStore';
 import * as SecureStore from 'expo-secure-store';
 import * as FileSystem from 'expo-file-system';
@@ -91,7 +91,7 @@ describe('Secure Store Service', () => {
   });
 });
 
-describe('analyzeMealImageOnDevice', () => {
+describe('analyzeMeal & analyzeMealImageOnDevice', () => {
   const originalFetch = global.fetch;
 
   beforeEach(() => {
@@ -109,13 +109,76 @@ describe('analyzeMealImageOnDevice', () => {
     );
   });
 
-  it('calls Gemini API with dynamic model and returns parsed meal analysis', async () => {
+  it('throws error when neither photo nor description is provided', async () => {
+    await setApiKey('test-key');
+    await expect(analyzeMeal({ mealType: 'Lunch' })).rejects.toThrow(
+      'Please take a photo or enter a meal description to analyze.'
+    );
+  });
+
+  it('analyzes text-only meal description without requiring an image', async () => {
+    await setApiKey('test-key');
+
+    const mockResponsePayload = {
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                text: JSON.stringify({
+                  calories: 450,
+                  protein_g: 32,
+                  carbs_g: 40,
+                  fat_g: 14,
+                  feedback: ['✅ High quality protein', '⚠️ Light on veggies', '💡 Add a side salad'],
+                }),
+              },
+            ],
+          },
+        },
+      ],
+    };
+
+    global.fetch = jest.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/models?')) {
+        return { ok: false };
+      }
+      return {
+        ok: true,
+        json: async () => mockResponsePayload,
+      };
+    });
+
+    const result = await analyzeMeal({
+      mealDescription: '3 scrambled eggs, 2 slices whole wheat toast, black coffee',
+      mealType: 'Breakfast',
+      workoutNotes: 'Morning 5k run',
+    });
+
+    expect(result).toEqual({
+      calories: 450,
+      protein_g: 32,
+      carbs_g: 40,
+      fat_g: 14,
+      feedback: ['✅ High quality protein', '⚠️ Light on veggies', '💡 Add a side salad'],
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('gemini-1.5-flash:generateContent?key=test-key'),
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('3 scrambled eggs'),
+      })
+    );
+  });
+
+  it('calls Gemini API with image and returns parsed meal analysis', async () => {
     await setApiKey('test-key');
 
     const mockModelsPayload = {
       models: [
         {
-          name: 'models/gemini-2.5-flash',
+          name: 'models/gemini-1.5-flash',
           supportedGenerationMethods: ['generateContent'],
         },
       ],
@@ -164,7 +227,7 @@ describe('analyzeMealImageOnDevice', () => {
     });
 
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('gemini-2.5-flash:generateContent?key=test-key'),
+      expect.stringContaining('gemini-1.5-flash:generateContent?key=test-key'),
       expect.objectContaining({
         method: 'POST',
         body: expect.stringContaining('"mime_type":"image/png"'),
@@ -172,7 +235,7 @@ describe('analyzeMealImageOnDevice', () => {
     );
   });
 
-  it('cascades to next available model when a candidate returns 404 / not supported', async () => {
+  it('cascades to next available vision model when a model returns error', async () => {
     await setApiKey('test-key');
 
     const mockResponsePayload = {
@@ -199,11 +262,11 @@ describe('analyzeMealImageOnDevice', () => {
       if (url.includes('/models?')) {
         return { ok: false }; // fallback to default candidate list
       }
-      if (url.includes('gemini-2.5-flash:generateContent')) {
+      if (url.includes('gemini-1.5-flash:generateContent')) {
         return {
           ok: false,
-          status: 404,
-          text: async () => 'models/gemini-2.5-flash is not found',
+          status: 400,
+          text: async () => 'Image input modality is not enabled for models/gemini-1.5-flash',
         };
       }
       return {
@@ -215,25 +278,25 @@ describe('analyzeMealImageOnDevice', () => {
     const result = await analyzeMealImageOnDevice('file:///image.jpg', 'Dinner');
     expect(result?.calories).toBe(400);
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('gemini-2.0-flash:generateContent?key=test-key'),
+      expect.stringContaining('gemini-1.5-flash-latest:generateContent?key=test-key'),
       expect.anything()
     );
   });
 
-  it('throws error when Gemini API response is not ok and not 404', async () => {
-    await setApiKey('test-key');
+  it('throws error when API key is invalid', async () => {
+    await setApiKey('bad-key');
 
     global.fetch = jest.fn().mockImplementation(async (url: string) => {
       if (url.includes('/models?')) return { ok: false };
       return {
         ok: false,
         status: 400,
-        text: async () => 'Bad Request: API key invalid',
+        text: async () => 'API_KEY_INVALID: Key not valid',
       };
     });
 
     await expect(analyzeMealImageOnDevice('file:///image.jpg', 'Dinner')).rejects.toThrow(
-      'Gemini API Error: 400 - Bad Request: API key invalid'
+      'Invalid Gemini API Key. Please verify your API key in Settings.'
     );
   });
 });
