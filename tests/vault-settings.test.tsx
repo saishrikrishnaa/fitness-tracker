@@ -45,10 +45,12 @@ jest.mock('expo-secure-store', () => ({
 jest.mock('expo-local-authentication', () => ({
   hasHardwareAsync: jest.fn(async () => true),
   isEnrolledAsync: jest.fn(async () => true),
+  supportedAuthenticationTypesAsync: jest.fn(async () => [1]), // FINGERPRINT
   authenticateAsync: jest.fn(async () => ({ success: true })),
   AuthenticationType: {
     FINGERPRINT: 1,
     FACIAL_RECOGNITION: 2,
+    IRIS: 3,
   },
 }));
 
@@ -189,23 +191,29 @@ describe('Task 6: Biometric Progress Vault & Settings Screen', () => {
       expect(photos[1].date).toBe('2026-09-22');
     });
 
-    it('authenticates with biometrics successfully', async () => {
+    it('checks hardware, enrollment, and fingerprint authentication types', async () => {
+      const hasHw = await LocalAuthentication.hasHardwareAsync();
+      const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+      const types = await LocalAuthentication.supportedAuthenticationTypesAsync();
+      expect(hasHw).toBe(true);
+      expect(isEnrolled).toBe(true);
+      expect(types).toContain(LocalAuthentication.AuthenticationType.FINGERPRINT);
+    });
+
+    it('authenticates with fingerprint biometric prompt options', async () => {
       const authResult = await LocalAuthentication.authenticateAsync({
-        promptMessage: 'Authenticate to access Vault',
+        promptMessage: 'Unlock Progress Vault with Fingerprint',
+        cancelLabel: 'Cancel',
         fallbackLabel: 'Use PIN',
+        disableDeviceFallback: false,
       });
       expect(authResult.success).toBe(true);
       expect(LocalAuthentication.authenticateAsync).toHaveBeenCalledWith({
-        promptMessage: 'Authenticate to access Vault',
+        promptMessage: 'Unlock Progress Vault with Fingerprint',
+        cancelLabel: 'Cancel',
         fallbackLabel: 'Use PIN',
+        disableDeviceFallback: false,
       });
-    });
-
-    it('checks hardware and enrollment for biometrics', async () => {
-      const hasHw = await LocalAuthentication.hasHardwareAsync();
-      const isEnrolled = await LocalAuthentication.isEnrolledAsync();
-      expect(hasHw).toBe(true);
-      expect(isEnrolled).toBe(true);
     });
   });
 

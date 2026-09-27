@@ -31,8 +31,36 @@ export default function VaultScreen(): JSX.Element {
   const [photos, setPhotos] = useState<FitnessLogEntry[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [biometricType, setBiometricType] = useState<'fingerprint' | 'facial' | 'biometric' | 'none'>('none');
+  const [hasBiometrics, setHasBiometrics] = useState(false);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoPromptRef = useRef(false);
+
+  const checkBiometrics = useCallback(async () => {
+    try {
+      const hasHardware = await LocalAuthentication.hasHardwareAsync();
+      const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+
+      if (hasHardware && isEnrolled) {
+        setHasBiometrics(true);
+        const types = await LocalAuthentication.supportedAuthenticationTypesAsync();
+        if (types.includes(LocalAuthentication.AuthenticationType.FINGERPRINT)) {
+          setBiometricType('fingerprint');
+        } else if (types.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION)) {
+          setBiometricType('facial');
+        } else {
+          setBiometricType('biometric');
+        }
+      } else {
+        setHasBiometrics(false);
+        setBiometricType('none');
+      }
+    } catch {
+      setHasBiometrics(false);
+      setBiometricType('none');
+    }
+  }, []);
 
   const loadStoredPin = useCallback(async () => {
     try {
@@ -54,7 +82,8 @@ export default function VaultScreen(): JSX.Element {
 
   useEffect(() => {
     loadStoredPin();
-  }, [loadStoredPin]);
+    checkBiometrics();
+  }, [loadStoredPin, checkBiometrics]);
 
   useEffect(() => {
     return () => {
@@ -67,10 +96,19 @@ export default function VaultScreen(): JSX.Element {
   useFocusEffect(
     useCallback(() => {
       loadStoredPin();
+      checkBiometrics();
       if (isUnlocked) {
         loadPhotos();
+      } else if (!autoPromptRef.current) {
+        autoPromptRef.current = true;
+        // Optionally prompt on first screen entry if hardware is enrolled
+        LocalAuthentication.isEnrolledAsync().then((enrolled) => {
+          if (enrolled) {
+            handleBiometricAuth();
+          }
+        }).catch(() => {});
       }
-    }, [isUnlocked, loadPhotos, loadStoredPin])
+    }, [isUnlocked, loadPhotos, loadStoredPin, checkBiometrics])
   );
 
   const unlockVault = async () => {
@@ -128,13 +166,19 @@ export default function VaultScreen(): JSX.Element {
       const isEnrolled = await LocalAuthentication.isEnrolledAsync();
 
       if (!hasHardware || !isEnrolled) {
-        setErrorMessage('Biometrics not available on this device');
+        setErrorMessage('Biometrics not available or enrolled on this device');
         return;
       }
 
+      const promptLabel = biometricType === 'fingerprint'
+        ? 'Unlock Progress Vault with Fingerprint'
+        : 'Unlock Progress Vault';
+
       const result = await LocalAuthentication.authenticateAsync({
-        promptMessage: 'Authenticate to access Vault',
+        promptMessage: promptLabel,
+        cancelLabel: 'Cancel',
         fallbackLabel: 'Use PIN',
+        disableDeviceFallback: false,
       });
 
       if (result.success) {
@@ -165,6 +209,19 @@ export default function VaultScreen(): JSX.Element {
     setRefreshing(true);
     await loadPhotos();
     setRefreshing(false);
+  };
+
+  const getSubtitleText = () => {
+    if (biometricType === 'fingerprint') {
+      return 'Enter 4-digit PIN or scan fingerprint to unlock';
+    }
+    if (biometricType === 'facial') {
+      return 'Enter 4-digit PIN or use Face ID to unlock';
+    }
+    if (hasBiometrics) {
+      return 'Enter 4-digit PIN or use biometrics to unlock';
+    }
+    return 'Enter 4-digit PIN passcode to unlock';
   };
 
   const renderPhotoItem = ({ item }: { item: FitnessLogEntry }) => {
@@ -210,7 +267,7 @@ export default function VaultScreen(): JSX.Element {
             <Lock color={COLORS.primary} size={32} />
           </View>
           <Text style={styles.lockTitle}>Progress Vault</Text>
-          <Text style={styles.lockSubtitle}>Enter PIN or use biometric auth to unlock</Text>
+          <Text style={styles.lockSubtitle}>{getSubtitleText()}</Text>
         </View>
 
         <View style={styles.pinIndicatorContainer}>
@@ -227,6 +284,20 @@ export default function VaultScreen(): JSX.Element {
         </View>
 
         {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
+
+        {hasBiometrics ? (
+          <TouchableOpacity
+            testID="quick-biometric-btn"
+            style={styles.quickBiometricButton}
+            onPress={handleBiometricAuth}
+            activeOpacity={0.8}
+          >
+            <Fingerprint color={COLORS.primary} size={18} />
+            <Text style={styles.quickBiometricText}>
+              {biometricType === 'fingerprint' ? 'Touch Fingerprint Sensor' : 'Unlock with Biometrics'}
+            </Text>
+          </TouchableOpacity>
+        ) : null}
 
         <View style={styles.keypad}>
           {[
@@ -249,6 +320,7 @@ export default function VaultScreen(): JSX.Element {
           ))}
           <View style={styles.keypadRow}>
             <TouchableOpacity
+              testID="biometric-keypad-btn"
               style={styles.keypadKey}
               onPress={handleBiometricAuth}
               activeOpacity={0.7}
@@ -263,6 +335,7 @@ export default function VaultScreen(): JSX.Element {
               <Text style={styles.keypadKeyText}>0</Text>
             </TouchableOpacity>
             <TouchableOpacity
+              testID="delete-pin-btn"
               style={styles.keypadKey}
               onPress={handleDelete}
               activeOpacity={0.7}
@@ -387,6 +460,25 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: 'center',
     marginBottom: 16,
+  },
+  quickBiometricButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(6, 182, 212, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.3)',
+    borderRadius: 20,
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    alignSelf: 'center',
+    marginBottom: 20,
+  },
+  quickBiometricText: {
+    color: COLORS.primary,
+    fontSize: 13,
+    fontWeight: '600',
   },
   keypad: {
     maxWidth: 280,
