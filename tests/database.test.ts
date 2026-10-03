@@ -1,6 +1,18 @@
-import { formatLogForStorage, parseDbRowToLog, getDb, initDatabase, saveLogEntry, getLogEntries, getProgressPhotos } from '../db/database';
+import {
+  formatLogForStorage,
+  parseDbRowToLog,
+  getDb,
+  initDatabase,
+  saveLogEntry,
+  getLogEntries,
+  getProgressPhotos,
+  saveChatMessage,
+  getChatMessages,
+  clearChatMessages,
+  saveLogFromExtractedData,
+} from '../db/database';
 import { savePhotoLocally } from '../services/storage';
-import { NewFitnessLog } from '../types/fitness';
+import { NewFitnessLog, ChatMessage, NewChatMessage, ChatExtractedData } from '../types/fitness';
 import * as SQLite from 'expo-sqlite';
 import * as FileSystem from 'expo-file-system';
 
@@ -218,6 +230,176 @@ describe('Database Operations', () => {
     );
     expect(photos).toHaveLength(1);
     expect(photos[0].progress_photo_uri).toBe('file:///progress.jpg');
+  });
+
+  it('saves a chat message with extracted data and returns insert id', async () => {
+    const msg: NewChatMessage = {
+      sender: 'coach',
+      text: 'Great job!',
+      image_uri: 'file:///meal.jpg',
+      extracted_data: {
+        has_data: true,
+        nutrition: {
+          meal_type: 'Lunch',
+          calories: 500,
+          protein_g: 40,
+          carbs_g: 50,
+          fat_g: 15,
+          food_items: ['Chicken', 'Rice'],
+        },
+      },
+    };
+
+    const id = await saveChatMessage(msg);
+    expect(id).toBe(42);
+    expect(mockDb.runAsync).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO chat_messages'),
+      [
+        'coach',
+        'Great job!',
+        'file:///meal.jpg',
+        JSON.stringify(msg.extracted_data),
+      ]
+    );
+  });
+
+  it('saves a chat message without extracted data (null)', async () => {
+    const msg: NewChatMessage = {
+      sender: 'user',
+      text: 'Hello coach',
+    };
+
+    const id = await saveChatMessage(msg);
+    expect(id).toBe(42);
+    expect(mockDb.runAsync).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO chat_messages'),
+      ['user', 'Hello coach', null, null]
+    );
+  });
+
+  it('retrieves chat messages and correctly parses extracted_data JSON', async () => {
+    const extractedData: ChatExtractedData = {
+      has_data: true,
+      nutrition: {
+        meal_type: 'Dinner',
+        calories: 600,
+        protein_g: 45,
+        carbs_g: 55,
+        fat_g: 20,
+      },
+    };
+    mockDb.getAllAsync.mockResolvedValueOnce([
+      {
+        id: 1,
+        sender: 'user',
+        text: 'Ate dinner',
+        image_uri: null,
+        extracted_data: JSON.stringify(extractedData),
+        created_at: '2026-10-03 10:00:00',
+      },
+      {
+        id: 2,
+        sender: 'coach',
+        text: 'Awesome!',
+        image_uri: null,
+        extracted_data: null,
+        created_at: '2026-10-03 10:01:00',
+      },
+    ]);
+
+    const messages = await getChatMessages();
+    expect(mockDb.getAllAsync).toHaveBeenCalledWith('SELECT * FROM chat_messages ORDER BY id ASC');
+    expect(messages).toHaveLength(2);
+    expect(messages[0].extracted_data).toEqual(extractedData);
+    expect(messages[0].sender).toBe('user');
+    expect(messages[1].extracted_data).toBeNull();
+  });
+
+  it('clears all chat messages', async () => {
+    await clearChatMessages();
+    expect(mockDb.execAsync).toHaveBeenCalledWith('DELETE FROM chat_messages');
+  });
+
+  describe('saveLogFromExtractedData', () => {
+    it('saves fitness log entry when extracted has_data is true', async () => {
+      const extracted: ChatExtractedData = {
+        has_data: true,
+        nutrition: {
+          meal_type: 'Dinner',
+          calories: 650,
+          protein_g: 50,
+          carbs_g: 60,
+          fat_g: 20,
+          food_items: ['Steak', 'Potatoes'],
+        },
+        workout: {
+          workout_notes: 'Leg day - Squats 5x5',
+          duration_mins: 45,
+        },
+        weight_kg: 75.2,
+        recovery: {
+          wind_down: 'Stretching & bath',
+        },
+        is_progress_photo: false,
+      };
+
+      const result = await saveLogFromExtractedData(extracted, 'file:///meal.jpg', null);
+      expect(result).toBe(42);
+      expect(mockDb.runAsync).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO fitness_logs'),
+        expect.arrayContaining([
+          'Dinner',
+          650,
+          50,
+          60,
+          20,
+          75.2,
+          'Leg day - Squats 5x5',
+          'Stretching & bath',
+          '[]',
+          'file:///meal.jpg',
+          null,
+        ])
+      );
+    });
+
+    it('returns null and does not save log entry when has_data is false', async () => {
+      const extracted: ChatExtractedData = {
+        has_data: false,
+      };
+
+      const result = await saveLogFromExtractedData(extracted);
+      expect(result).toBeNull();
+      expect(mockDb.runAsync).not.toHaveBeenCalled();
+    });
+
+    it('uses fallback default values when nutrition fields are missing but has_data is true', async () => {
+      const extracted: ChatExtractedData = {
+        has_data: true,
+        workout: {
+          workout_notes: 'Cardio run',
+        },
+      };
+
+      const result = await saveLogFromExtractedData(extracted);
+      expect(result).toBe(42);
+      expect(mockDb.runAsync).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO fitness_logs'),
+        expect.arrayContaining([
+          'Lunch',
+          0,
+          0,
+          0,
+          0,
+          null,
+          'Cardio run',
+          null,
+          '[]',
+          null,
+          null,
+        ])
+      );
+    });
   });
 });
 

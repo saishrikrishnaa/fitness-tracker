@@ -1,5 +1,11 @@
 import * as SQLite from 'expo-sqlite';
-import { FitnessLogEntry, NewFitnessLog } from '../types/fitness';
+import {
+  FitnessLogEntry,
+  NewFitnessLog,
+  ChatMessage,
+  NewChatMessage,
+  ChatExtractedData,
+} from '../types/fitness';
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
@@ -38,6 +44,15 @@ export async function initDatabase(db: SQLite.SQLiteDatabase): Promise<void> {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sender TEXT NOT NULL,
+      text TEXT NOT NULL,
+      image_uri TEXT,
+      extracted_data TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_created_at ON chat_messages(created_at);
   `);
 }
 
@@ -126,3 +141,82 @@ export async function getProgressPhotos(): Promise<FitnessLogEntry[]> {
   );
   return rows.map(parseDbRowToLog);
 }
+
+export function parseDbRowToChatMessage(row: any): ChatMessage {
+  let extracted: ChatExtractedData | null = null;
+  try {
+    if (typeof row.extracted_data === 'string') {
+      extracted = JSON.parse(row.extracted_data);
+    } else if (row.extracted_data && typeof row.extracted_data === 'object') {
+      extracted = row.extracted_data;
+    }
+  } catch {
+    extracted = null;
+  }
+  return {
+    id: row.id,
+    sender: row.sender,
+    text: row.text,
+    image_uri: row.image_uri || null,
+    extracted_data: extracted,
+    created_at: row.created_at,
+  };
+}
+
+export async function saveChatMessage(message: NewChatMessage): Promise<number> {
+  const db = await getDb();
+  const extractedJson = message.extracted_data ? JSON.stringify(message.extracted_data) : null;
+  const result = await db.runAsync(
+    `INSERT INTO chat_messages (sender, text, image_uri, extracted_data) VALUES (?, ?, ?, ?)`,
+    [
+      message.sender,
+      message.text,
+      message.image_uri ?? null,
+      extractedJson,
+    ]
+  );
+  return result.lastInsertRowId;
+}
+
+export async function getChatMessages(): Promise<ChatMessage[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync('SELECT * FROM chat_messages ORDER BY id ASC');
+  return rows.map(parseDbRowToChatMessage);
+}
+
+export async function clearChatMessages(): Promise<void> {
+  const db = await getDb();
+  await db.execAsync('DELETE FROM chat_messages');
+}
+
+export async function saveLogFromExtractedData(
+  extracted: ChatExtractedData,
+  mealPhotoUri?: string | null,
+  progressPhotoUri?: string | null
+): Promise<number | null> {
+  if (!extracted.has_data) {
+    return null;
+  }
+  const now = new Date();
+  const timestamp = now.toISOString();
+  const date = timestamp.split('T')[0];
+
+  const logEntry: NewFitnessLog = {
+    timestamp,
+    date,
+    meal_type: extracted.nutrition?.meal_type || 'Lunch',
+    calories: extracted.nutrition?.calories || 0,
+    protein_g: extracted.nutrition?.protein_g || 0,
+    carbs_g: extracted.nutrition?.carbs_g || 0,
+    fat_g: extracted.nutrition?.fat_g || 0,
+    weight_kg: extracted.weight_kg ?? null,
+    workout_notes: extracted.workout?.workout_notes ?? null,
+    wind_down: extracted.recovery?.wind_down ?? null,
+    ai_feedback: [],
+    meal_photo_uri: mealPhotoUri ?? null,
+    progress_photo_uri: progressPhotoUri ?? null,
+  };
+
+  return await saveLogEntry(logEntry);
+}
+
