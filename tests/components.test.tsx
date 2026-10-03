@@ -1,4 +1,4 @@
-﻿import React from 'react';
+import React from 'react';
 
 jest.mock('react-native', () => {
   const mockReact = require('react');
@@ -117,16 +117,21 @@ jest.mock('lucide-react-native', () => ({
   EyeOff: () => null,
   Save: () => null,
   CheckCircle: () => null,
+  CheckCircle2: () => null,
+  Dumbbell: () => null,
+  Moon: () => null,
 }));
 
 import { GlassCard } from '../components/GlassCard';
 import { MacroBar } from '../components/MacroBar';
+import { LoggedActivityCard } from '../components/LoggedActivityCard';
 import LogScreen, { MEAL_TYPES } from '../app/(tabs)/index';
 import TabLayout from '../app/(tabs)/_layout';
 import AnalyticsScreen from '../app/(tabs)/analytics';
 import VaultScreen from '../app/(tabs)/vault';
 import SettingsScreen from '../app/(tabs)/settings';
 import { COLORS } from '../constants/theme';
+import { ChatExtractedData } from '../types/fitness';
 
 describe('UI Components & Log Screen Helpers', () => {
   describe('GlassCard', () => {
@@ -192,4 +197,74 @@ describe('UI Components & Log Screen Helpers', () => {
       expect(COLORS.textSecondary).toBe('#9CA3AF');
     });
   });
+
+  describe('LoggedActivityCard', () => {
+    it('returns null when data is null or undefined', () => {
+      expect(LoggedActivityCard({ data: null })).toBeNull();
+      expect(LoggedActivityCard({ data: undefined })).toBeNull();
+    });
+
+    it('returns null when has_data is false', () => {
+      const data: ChatExtractedData = {
+        has_data: false,
+      };
+      expect(LoggedActivityCard({ data })).toBeNull();
+    });
+
+    it('renders all badges when all data fields are populated', () => {
+      const fullData: ChatExtractedData = {
+        has_data: true,
+        nutrition: {
+          meal_type: 'Breakfast',
+          calories: 450,
+          protein_g: 35,
+          carbs_g: 40,
+          fat_g: 15,
+          food_items: ['Oatmeal', 'Protein Powder', 'Blueberries'],
+        },
+        workout: {
+          workout_notes: 'Heavy leg press and squats',
+          duration_mins: 45,
+        },
+        weight_kg: 78.5,
+        recovery: {
+          wind_down: '10 min stretching and chamomile tea',
+        },
+        is_progress_photo: true,
+      };
+
+      const result = LoggedActivityCard({ data: fullData });
+      expect(result).not.toBeNull();
+      expect(result?.props.testID).toBe('logged-activity-card');
+
+      const children = React.Children.toArray(result?.props.children);
+      // Header + 5 sections
+      expect(children.length).toBe(6);
+    });
+
+    it('renders partial badges conditionally based on presence of data fields', () => {
+      const partialData: ChatExtractedData = {
+        has_data: true,
+        nutrition: {
+          meal_type: 'Lunch',
+          calories: 600,
+          protein_g: 45,
+          carbs_g: 50,
+          fat_g: 20,
+        },
+        workout: {
+          workout_notes: '5km outdoor run',
+        },
+      };
+
+      const result = LoggedActivityCard({ data: partialData });
+      expect(result).not.toBeNull();
+
+      const children = React.Children.toArray(result?.props.children);
+      // Header + nutrition + workout = 3 valid children (weight, recovery, progress photo omitted)
+      const validSections = children.filter(Boolean);
+      expect(validSections.length).toBe(3);
+    });
+  });
 });
+
