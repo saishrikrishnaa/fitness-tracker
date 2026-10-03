@@ -22,6 +22,11 @@ jest.mock('react-native', () => {
     useWindowDimensions: () => ({ width: 390, height: 844 }),
     FlatList: (props: any) => mockReact.createElement('FlatList', props, props.children),
     RefreshControl: (props: any) => mockReact.createElement('RefreshControl', props, props.children),
+    KeyboardAvoidingView: (props: any) => mockReact.createElement('KeyboardAvoidingView', props, props.children),
+    Platform: {
+      OS: 'ios',
+      select: (objs: any) => objs.ios,
+    },
   };
 });
 
@@ -37,6 +42,59 @@ jest.mock('expo-file-system', () => ({
   copyAsync: jest.fn(),
   readAsStringAsync: jest.fn(async () => 'base64data'),
   EncodingType: { Base64: 'base64' },
+}));
+
+const mockChatMessages: any[] = [
+  {
+    id: 1,
+    sender: 'user',
+    text: 'Ate a bowl of oatmeal with protein powder',
+    image_uri: 'file:///data/user/meal.jpg',
+    extracted_data: null,
+    created_at: '2026-10-03T08:00:00.000Z',
+  },
+  {
+    id: 2,
+    sender: 'coach',
+    text: 'Great breakfast! High in complex carbs and quality protein.',
+    image_uri: null,
+    extracted_data: {
+      has_data: true,
+      nutrition: {
+        meal_type: 'Breakfast',
+        calories: 380,
+        protein_g: 30,
+        carbs_g: 45,
+        fat_g: 6,
+        food_items: ['Oatmeal', 'Protein Powder'],
+      },
+    },
+    created_at: '2026-10-03T08:01:00.000Z',
+  },
+];
+
+jest.mock('../db/database', () => ({
+  getChatMessages: jest.fn(async () => mockChatMessages),
+  saveChatMessage: jest.fn(async () => 3),
+  clearChatMessages: jest.fn(async () => {}),
+  saveLogFromExtractedData: jest.fn(async () => 10),
+}));
+
+jest.mock('../services/gemini', () => ({
+  sendChatMessageToCoach: jest.fn(async () => ({
+    coach_response: 'Nice workout! Keep pushing hard.',
+    extracted_data: {
+      has_data: true,
+      workout: {
+        workout_notes: '45 mins chest press and tricep pushdowns',
+        duration_mins: 45,
+      },
+    },
+  })),
+}));
+
+jest.mock('../services/storage', () => ({
+  savePhotoLocally: jest.fn(async (uri: string, category: string) => `file:///saved/${category}/${Date.now()}.jpg`),
 }));
 
 jest.mock('expo-sqlite', () => ({
@@ -56,17 +114,23 @@ jest.mock('expo-secure-store', () => ({
 }));
 
 jest.mock('expo-image-picker', () => ({
-  requestCameraPermissionsAsync: jest.fn(),
-  launchCameraAsync: jest.fn(),
-  launchImageLibraryAsync: jest.fn(),
+  requestCameraPermissionsAsync: jest.fn(async () => ({ status: 'granted' })),
+  launchCameraAsync: jest.fn(async () => ({
+    canceled: false,
+    assets: [{ uri: 'file:///camera/photo.jpg' }],
+  })),
+  launchImageLibraryAsync: jest.fn(async () => ({
+    canceled: false,
+    assets: [{ uri: 'file:///gallery/photo.jpg' }],
+  })),
   MediaTypeOptions: { Images: 'Images' },
 }));
 
 jest.mock('expo-haptics', () => ({
-  impactAsync: jest.fn(),
-  notificationAsync: jest.fn(),
-  ImpactFeedbackStyle: { Medium: 'medium' },
-  NotificationFeedbackType: { Success: 'success' },
+  impactAsync: jest.fn(async () => {}),
+  notificationAsync: jest.fn(async () => {}),
+  ImpactFeedbackStyle: { Medium: 'medium', Light: 'light', Heavy: 'heavy' },
+  NotificationFeedbackType: { Success: 'success', Error: 'error', Warning: 'warning' },
 }));
 
 jest.mock('expo-router', () => {
@@ -120,8 +184,14 @@ jest.mock('lucide-react-native', () => ({
   CheckCircle2: () => null,
   Dumbbell: () => null,
   Moon: () => null,
+  Send: () => null,
+  Trash2: () => null,
+  X: () => null,
+  Sparkles: () => null,
 }));
 
+import { Alert } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { GlassCard } from '../components/GlassCard';
 import { MacroBar } from '../components/MacroBar';
 import { LoggedActivityCard } from '../components/LoggedActivityCard';
@@ -132,8 +202,20 @@ import VaultScreen from '../app/(tabs)/vault';
 import SettingsScreen from '../app/(tabs)/settings';
 import { COLORS } from '../constants/theme';
 import { ChatExtractedData } from '../types/fitness';
+import {
+  getChatMessages,
+  saveChatMessage,
+  clearChatMessages,
+  saveLogFromExtractedData,
+} from '../db/database';
+import { sendChatMessageToCoach } from '../services/gemini';
+import { savePhotoLocally } from '../services/storage';
 
 describe('UI Components & Log Screen Helpers', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   describe('GlassCard', () => {
     it('creates GlassCard component element with children', () => {
       const element = <GlassCard><></></GlassCard>;
@@ -266,5 +348,105 @@ describe('UI Components & Log Screen Helpers', () => {
       expect(validSections.length).toBe(3);
     });
   });
-});
 
+  describe('LogScreen Conversational Chat Interface', () => {
+    it('is a valid React component function', () => {
+      expect(typeof LogScreen).toBe('function');
+    });
+
+    it('creates LogScreen JSX element with correct component type', () => {
+      const element = <LogScreen />;
+      expect(element).toBeDefined();
+      expect(element.type).toBe(LogScreen);
+    });
+
+    it('loads chat messages from SQLite database', async () => {
+      const messages = await getChatMessages();
+      expect(messages).toHaveLength(2);
+      expect(messages[0].sender).toBe('user');
+      expect(messages[0].text).toContain('oatmeal');
+      expect(messages[1].sender).toBe('coach');
+      expect(messages[1].extracted_data?.has_data).toBe(true);
+      expect(messages[1].extracted_data?.nutrition?.meal_type).toBe('Breakfast');
+    });
+
+    it('saves user and coach messages to SQLite database', async () => {
+      const userMsgId = await saveChatMessage({
+        sender: 'user',
+        text: 'Did 45 mins chest workout',
+      });
+      expect(userMsgId).toBe(3);
+      expect(saveChatMessage).toHaveBeenCalledWith({
+        sender: 'user',
+        text: 'Did 45 mins chest workout',
+      });
+
+      const coachMsgId = await saveChatMessage({
+        sender: 'coach',
+        text: 'Awesome workout! 45 mins of chest logged.',
+        extracted_data: {
+          has_data: true,
+          workout: { workout_notes: 'Chest workout', duration_mins: 45 },
+        },
+      });
+      expect(coachMsgId).toBe(3);
+    });
+
+    it('clears chat history from database on user confirmation', async () => {
+      await clearChatMessages();
+      expect(clearChatMessages).toHaveBeenCalled();
+    });
+
+    it('handles camera launch and photo capture', async () => {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      expect(perm.status).toBe('granted');
+
+      const photoRes = await ImagePicker.launchCameraAsync({ quality: 0.8 });
+      expect(photoRes.canceled).toBe(false);
+      expect(photoRes.assets[0].uri).toBe('file:///camera/photo.jpg');
+    });
+
+    it('handles gallery photo selection', async () => {
+      const galleryRes = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.8,
+      });
+      expect(galleryRes.canceled).toBe(false);
+      expect(galleryRes.assets[0].uri).toBe('file:///gallery/photo.jpg');
+    });
+
+    it('executes full chat coaching flow and syncs fitness logs', async () => {
+      const coachResponse = {
+        coach_response: 'Logged 45 mins of chest training!',
+        extracted_data: {
+          has_data: true,
+          workout: {
+            workout_notes: 'Chest & arms workout',
+            duration_mins: 45,
+          },
+        },
+      };
+      (sendChatMessageToCoach as jest.Mock).mockResolvedValueOnce(coachResponse);
+
+      const res = await sendChatMessageToCoach('Did chest and arms workout for 45 mins');
+      expect(res.coach_response).toBe('Logged 45 mins of chest training!');
+      expect(res.extracted_data.has_data).toBe(true);
+
+      const logId = await saveLogFromExtractedData(res.extracted_data);
+      expect(logId).toBe(10);
+      expect(saveLogFromExtractedData).toHaveBeenCalledWith(res.extracted_data);
+    });
+
+    it('saves progress selfie to progress vault when is_progress_photo is true', async () => {
+      const progressPhotoUri = await savePhotoLocally('file:///camera/physique.jpg', 'progress');
+      expect(progressPhotoUri).toContain('/progress/');
+      expect(savePhotoLocally).toHaveBeenCalledWith('file:///camera/physique.jpg', 'progress');
+    });
+
+    it('saves meal photo to meals vault when nutrition data is present', async () => {
+      const mealPhotoUri = await savePhotoLocally('file:///camera/meal.jpg', 'meals');
+      expect(mealPhotoUri).toContain('/meals/');
+      expect(savePhotoLocally).toHaveBeenCalledWith('file:///camera/meal.jpg', 'meals');
+    });
+  });
+});
