@@ -371,10 +371,12 @@ export async function sendChatMessageToCoach(
   const contents: any[] = [];
   if (history && history.length > 0) {
     for (const h of history) {
-      contents.push({
-        role: h.role,
-        parts: [{ text: h.text }],
-      });
+      if (h.text && h.text.trim().length > 0) {
+        contents.push({
+          role: h.role,
+          parts: [{ text: h.text }],
+        });
+      }
     }
   }
 

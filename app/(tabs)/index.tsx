@@ -181,10 +181,13 @@ export default function LogScreen(): JSX.Element {
       });
 
       // Build conversation history from recent messages (last 8)
-      const history = messages.slice(-8).map((msg) => ({
-        role: msg.sender === 'coach' ? ('model' as const) : ('user' as const),
-        text: msg.text,
-      }));
+      const history = messages
+        .slice(-8)
+        .map((msg) => ({
+          role: msg.sender === 'coach' ? ('model' as const) : ('user' as const),
+          text: msg.text || (msg.image_uri ? '[Image attached]' : ''),
+        }))
+        .filter((msg) => Boolean(msg.text && msg.text.trim().length > 0));
 
       // Query Gemini Coach
       const coachResult = await sendChatMessageToCoach(userText, imageUri, history);
@@ -228,6 +231,8 @@ export default function LogScreen(): JSX.Element {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       flatListRef.current?.scrollToEnd({ animated: true });
     } catch (err: any) {
+      setInputText(userText);
+      setAttachedImage(imageUri);
       Alert.alert('Coach Error', err?.message || 'Failed to communicate with Fuel Coach.');
     } finally {
       setIsSending(false);

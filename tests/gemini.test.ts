@@ -533,6 +533,47 @@ describe('sendChatMessageToCoach', () => {
     );
   });
 
+  it('filters out empty or whitespace history entries before sending to Gemini', async () => {
+    await setApiKey('test-key');
+
+    const mockResponsePayload = {
+      candidates: [
+        {
+          content: {
+            parts: [{ text: JSON.stringify({ coach_response: 'Got it!', extracted_data: { has_data: false } }) }],
+          },
+        },
+      ],
+    };
+
+    global.fetch = jest.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/models?')) return { ok: false };
+      return {
+        ok: true,
+        json: async () => mockResponsePayload,
+      };
+    });
+
+    const historyWithEmpty = [
+      { role: 'user' as const, text: '' },
+      { role: 'model' as const, text: '   ' },
+      { role: 'user' as const, text: 'Leg day yesterday' },
+    ];
+
+    const result = await sendChatMessageToCoach('How much rest between sets?', null, historyWithEmpty);
+    expect(result.coach_response).toBe('Got it!');
+
+    const fetchCall = (global.fetch as jest.Mock).mock.calls.find((c) =>
+      c[0].includes('gemini-1.5-flash:generateContent')
+    );
+    expect(fetchCall).toBeDefined();
+    const requestBody = JSON.parse(fetchCall[1].body);
+    // requestBody.contents should contain the valid history entry and the current user query, but not empty ones
+    expect(requestBody.contents).toHaveLength(2);
+    expect(requestBody.contents[0].parts[0].text).toBe('Leg day yesterday');
+    expect(requestBody.contents[1].parts[0].text).toBe('How much rest between sets?');
+  });
+
   it('sends photo and message and returns extracted progress photo and nutrition data', async () => {
     await setApiKey('test-key');
 

@@ -403,7 +403,7 @@ describe('UI Components & Log Screen Helpers', () => {
 
       const photoRes = await ImagePicker.launchCameraAsync({ quality: 0.8 });
       expect(photoRes.canceled).toBe(false);
-      expect(photoRes.assets[0].uri).toBe('file:///camera/photo.jpg');
+      expect(photoRes.assets?.[0]?.uri).toBe('file:///camera/photo.jpg');
     });
 
     it('handles gallery photo selection', async () => {
@@ -412,7 +412,7 @@ describe('UI Components & Log Screen Helpers', () => {
         quality: 0.8,
       });
       expect(galleryRes.canceled).toBe(false);
-      expect(galleryRes.assets[0].uri).toBe('file:///gallery/photo.jpg');
+      expect(galleryRes.assets?.[0]?.uri).toBe('file:///gallery/photo.jpg');
     });
 
     it('executes full chat coaching flow and syncs fitness logs', async () => {
