@@ -1,4 +1,12 @@
-import { parseGeminiResponse, analyzeMeal, analyzeMealImageOnDevice, getMimeType, getAvailableGeminiModels } from '../services/gemini';
+import {
+  parseGeminiResponse,
+  parseCoachResponse,
+  analyzeMeal,
+  analyzeMealImageOnDevice,
+  sendChatMessageToCoach,
+  getMimeType,
+  getAvailableGeminiModels,
+} from '../services/gemini';
 import { getApiKey, setApiKey, getVaultPin, setVaultPin } from '../services/secureStore';
 import * as SecureStore from 'expo-secure-store';
 import * as FileSystem from 'expo-file-system';
@@ -59,6 +67,118 @@ describe('Gemini Response Parser', () => {
   it('falls back gracefully on invalid JSON', () => {
     const parsed = parseGeminiResponse('invalid non-json response');
     expect(parsed).toBeNull();
+  });
+});
+
+describe('Coach Response Parser (parseCoachResponse)', () => {
+  it('parses complete structured JSON with all buckets correctly', () => {
+    const rawJson = JSON.stringify({
+      coach_response: 'Great high-protein lunch and solid bench workout!',
+      extracted_data: {
+        has_data: true,
+        nutrition: {
+          meal_type: 'Lunch',
+          calories: 650,
+          protein_g: 50,
+          carbs_g: 45,
+          fat_g: 20,
+          food_items: ['Chicken breast', 'Rice', 'Broccoli'],
+        },
+        workout: {
+          workout_notes: 'Chest & Triceps: 4x8 Bench Press, 3x12 Dips',
+          duration_mins: 45,
+        },
+        weight_kg: 82.5,
+        recovery: {
+          wind_down: '15 mins sauna and stretching',
+        },
+        is_progress_photo: false,
+      },
+    });
+
+    const parsed = parseCoachResponse(rawJson);
+    expect(parsed).toEqual({
+      coach_response: 'Great high-protein lunch and solid bench workout!',
+      extracted_data: {
+        has_data: true,
+        nutrition: {
+          meal_type: 'Lunch',
+          calories: 650,
+          protein_g: 50,
+          carbs_g: 45,
+          fat_g: 20,
+          food_items: ['Chicken breast', 'Rice', 'Broccoli'],
+        },
+        workout: {
+          workout_notes: 'Chest & Triceps: 4x8 Bench Press, 3x12 Dips',
+          duration_mins: 45,
+        },
+        weight_kg: 82.5,
+        recovery: {
+          wind_down: '15 mins sauna and stretching',
+        },
+        is_progress_photo: false,
+      },
+    });
+  });
+
+  it('parses coach response enclosed in markdown code block', () => {
+    const rawText = '```json\n{"coach_response": "Looking lean!", "extracted_data": {"has_data": true, "is_progress_photo": true, "weight_kg": 75}}\n```';
+    const parsed = parseCoachResponse(rawText);
+    expect(parsed).toEqual({
+      coach_response: 'Looking lean!',
+      extracted_data: {
+        has_data: true,
+        nutrition: null,
+        workout: null,
+        weight_kg: 75,
+        recovery: null,
+        is_progress_photo: true,
+      },
+    });
+  });
+
+  it('parses general chat response with has_data: false', () => {
+    const rawJson = JSON.stringify({
+      coach_response: 'To build muscle effectively, aim for 1.6-2.2g of protein per kg of bodyweight.',
+      extracted_data: {
+        has_data: false,
+        nutrition: null,
+        workout: null,
+        weight_kg: null,
+        recovery: null,
+        is_progress_photo: false,
+      },
+    });
+
+    const parsed = parseCoachResponse(rawJson);
+    expect(parsed).toEqual({
+      coach_response: 'To build muscle effectively, aim for 1.6-2.2g of protein per kg of bodyweight.',
+      extracted_data: {
+        has_data: false,
+        nutrition: null,
+        workout: null,
+        weight_kg: null,
+        recovery: null,
+        is_progress_photo: false,
+      },
+    });
+  });
+
+  it('falls back gracefully to plain coach response on malformed non-JSON text', () => {
+    const rawText = 'Keep pushing hard in the gym today! Remember to hydrate.';
+    const parsed = parseCoachResponse(rawText);
+    expect(parsed).toEqual({
+      coach_response: 'Keep pushing hard in the gym today! Remember to hydrate.',
+      extracted_data: {
+        has_data: false,
+      },
+    });
+  });
+
+  it('returns null for empty or non-string inputs', () => {
+    expect(parseCoachResponse('')).toBeNull();
+    expect(parseCoachResponse(null as any)).toBeNull();
   });
 });
 
@@ -296,6 +416,273 @@ describe('analyzeMeal & analyzeMealImageOnDevice', () => {
     });
 
     await expect(analyzeMealImageOnDevice('file:///image.jpg', 'Dinner')).rejects.toThrow(
+      'Invalid Gemini API Key. Please verify your API key in Settings.'
+    );
+  });
+});
+
+describe('sendChatMessageToCoach', () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    (SecureStore as any).__store.clear();
+    jest.clearAllMocks();
+  });
+
+  afterAll(() => {
+    global.fetch = originalFetch;
+  });
+
+  it('throws error when API key is missing', async () => {
+    await expect(sendChatMessageToCoach('Hello coach')).rejects.toThrow(
+      'Missing Gemini API Key. Please configure it in Settings.'
+    );
+  });
+
+  it('throws error when neither message nor photo is provided', async () => {
+    await setApiKey('test-key');
+    await expect(sendChatMessageToCoach('')).rejects.toThrow(
+      'Please provide a message or photo to send to Fuel Coach.'
+    );
+  });
+
+  it('sends text-only message with history and returns parsed coach response with extracted data', async () => {
+    await setApiKey('test-key');
+
+    const mockResponsePayload = {
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                text: JSON.stringify({
+                  coach_response: 'Awesome chest workout and nutritious lunch!',
+                  extracted_data: {
+                    has_data: true,
+                    nutrition: {
+                      meal_type: 'Lunch',
+                      calories: 600,
+                      protein_g: 45,
+                      carbs_g: 55,
+                      fat_g: 15,
+                      food_items: ['Turkey sandwich', 'Apple'],
+                    },
+                    workout: {
+                      workout_notes: 'Bench press 5x5, incline DB press 3x10',
+                      duration_mins: 50,
+                    },
+                    weight_kg: 80,
+                    recovery: null,
+                    is_progress_photo: false,
+                  },
+                }),
+              },
+            ],
+          },
+        },
+      ],
+    };
+
+    global.fetch = jest.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/models?')) return { ok: false };
+      return {
+        ok: true,
+        json: async () => mockResponsePayload,
+      };
+    });
+
+    const history = [
+      { role: 'user' as const, text: 'Hi coach, starting my cut today.' },
+      { role: 'model' as const, text: 'Welcome! Keep protein high and let me know your meals and workouts.' },
+    ];
+
+    const result = await sendChatMessageToCoach(
+      'Had turkey sandwich and apple for lunch, then hit bench press 5x5 for 50 mins. Weight is 80kg.',
+      null,
+      history
+    );
+
+    expect(result).toEqual({
+      coach_response: 'Awesome chest workout and nutritious lunch!',
+      extracted_data: {
+        has_data: true,
+        nutrition: {
+          meal_type: 'Lunch',
+          calories: 600,
+          protein_g: 45,
+          carbs_g: 55,
+          fat_g: 15,
+          food_items: ['Turkey sandwich', 'Apple'],
+        },
+        workout: {
+          workout_notes: 'Bench press 5x5, incline DB press 3x10',
+          duration_mins: 50,
+        },
+        weight_kg: 80,
+        recovery: null,
+        is_progress_photo: false,
+      },
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('gemini-1.5-flash:generateContent?key=test-key'),
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('Hi coach, starting my cut today.'),
+      })
+    );
+  });
+
+  it('sends photo and message and returns extracted progress photo and nutrition data', async () => {
+    await setApiKey('test-key');
+
+    const mockResponsePayload = {
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                text: JSON.stringify({
+                  coach_response: 'Physique looks solid! Definite delt and upper chest definition improvement.',
+                  extracted_data: {
+                    has_data: true,
+                    nutrition: null,
+                    workout: null,
+                    weight_kg: 76.5,
+                    recovery: {
+                      wind_down: 'Sauna 20 min',
+                    },
+                    is_progress_photo: true,
+                  },
+                }),
+              },
+            ],
+          },
+        },
+      ],
+    };
+
+    global.fetch = jest.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/models?')) return { ok: false };
+      return {
+        ok: true,
+        json: async () => mockResponsePayload,
+      };
+    });
+
+    const result = await sendChatMessageToCoach(
+      'Weekly physique check-in! Current weight 76.5kg, did 20 min sauna after training.',
+      'file:///progress_pic.png'
+    );
+
+    expect(result.extracted_data.is_progress_photo).toBe(true);
+    expect(result.extracted_data.weight_kg).toBe(76.5);
+    expect(result.extracted_data.recovery?.wind_down).toBe('Sauna 20 min');
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('gemini-1.5-flash:generateContent?key=test-key'),
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('"mime_type":"image/png"'),
+      })
+    );
+  });
+
+  it('handles general questions with has_data: false', async () => {
+    await setApiKey('test-key');
+
+    const mockResponsePayload = {
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                text: JSON.stringify({
+                  coach_response: 'Creatine monohydrate is safe and effective when taken 3-5g daily.',
+                  extracted_data: {
+                    has_data: false,
+                    nutrition: null,
+                    workout: null,
+                    weight_kg: null,
+                    recovery: null,
+                    is_progress_photo: false,
+                  },
+                }),
+              },
+            ],
+          },
+        },
+      ],
+    };
+
+    global.fetch = jest.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/models?')) return { ok: false };
+      return {
+        ok: true,
+        json: async () => mockResponsePayload,
+      };
+    });
+
+    const result = await sendChatMessageToCoach('How much creatine should I take daily?');
+    expect(result.coach_response).toContain('Creatine monohydrate');
+    expect(result.extracted_data.has_data).toBe(false);
+  });
+
+  it('cascades to next available model when a model returns error', async () => {
+    await setApiKey('test-key');
+
+    const mockResponsePayload = {
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                text: JSON.stringify({
+                  coach_response: 'Looking great!',
+                  extracted_data: { has_data: false },
+                }),
+              },
+            ],
+          },
+        },
+      ],
+    };
+
+    global.fetch = jest.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/models?')) return { ok: false };
+      if (url.includes('gemini-1.5-flash:generateContent')) {
+        return {
+          ok: false,
+          status: 503,
+          text: async () => 'Service Unavailable',
+        };
+      }
+      return {
+        ok: true,
+        json: async () => mockResponsePayload,
+      };
+    });
+
+    const result = await sendChatMessageToCoach('Check in');
+    expect(result.coach_response).toBe('Looking great!');
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('gemini-1.5-flash-latest:generateContent?key=test-key'),
+      expect.anything()
+    );
+  });
+
+  it('throws error when API key is invalid', async () => {
+    await setApiKey('bad-key');
+
+    global.fetch = jest.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/models?')) return { ok: false };
+      return {
+        ok: false,
+        status: 400,
+        text: async () => 'API_KEY_INVALID: Key not valid',
+      };
+    });
+
+    await expect(sendChatMessageToCoach('Hello')).rejects.toThrow(
       'Invalid Gemini API Key. Please verify your API key in Settings.'
     );
   });
