@@ -128,6 +128,48 @@ export async function saveLogEntry(entry: NewFitnessLog): Promise<number> {
   return result.lastInsertRowId;
 }
 
+export async function deleteLogEntry(id: number): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('DELETE FROM fitness_logs WHERE id = ?', [id]);
+}
+
+export async function clearAllFitnessLogs(): Promise<void> {
+  const db = await getDb();
+  await db.execAsync('DELETE FROM fitness_logs');
+}
+
+export async function deduplicateFitnessLogs(): Promise<number> {
+  const db = await getDb();
+  const rows = await db.getAllAsync('SELECT * FROM fitness_logs ORDER BY date DESC, id DESC');
+  if (!rows || rows.length <= 1) return 0;
+
+  const seenKeys = new Set<string>();
+  const idsToDelete: number[] = [];
+
+  for (const row of rows as any[]) {
+    const date = row.date || '';
+    const mealType = (row.meal_type || '').trim().toLowerCase();
+    const calories = Math.round(Number(row.calories) || 0);
+    const workout = (row.workout_notes || '').trim().toLowerCase();
+    const weight = row.weight_kg != null ? Number(row.weight_kg).toFixed(1) : '';
+
+    const key = `${date}|${mealType}|${calories}|${workout}|${weight}`;
+    if (seenKeys.has(key)) {
+      idsToDelete.push(Number(row.id));
+    } else {
+      seenKeys.add(key);
+    }
+  }
+
+  if (idsToDelete.length > 0) {
+    for (const id of idsToDelete) {
+      await db.runAsync('DELETE FROM fitness_logs WHERE id = ?', [id]);
+    }
+  }
+
+  return idsToDelete.length;
+}
+
 export async function getLogEntries(): Promise<FitnessLogEntry[]> {
   const db = await getDb();
   const rows = await db.getAllAsync('SELECT * FROM fitness_logs ORDER BY id DESC');
@@ -228,17 +270,83 @@ export async function saveLogFromExtractedData(
   const timestamp = now.toISOString();
   const date = timestamp.split('T')[0];
 
+  const mealType = extracted.nutrition?.meal_type || 'Lunch';
+  const calories = extracted.nutrition?.calories || 0;
+  const protein = extracted.nutrition?.protein_g || 0;
+  const carbs = extracted.nutrition?.carbs_g || 0;
+  const fat = extracted.nutrition?.fat_g || 0;
+  const weight = extracted.weight_kg ?? null;
+  const workoutNotes = extracted.workout?.workout_notes ?? null;
+  const windDown = extracted.recovery?.wind_down ?? null;
+
+  const db = await getDb();
+
+  // Deduplicate against logs from today
+  const existingToday = await db.getAllAsync(
+    'SELECT * FROM fitness_logs WHERE date = ? ORDER BY id DESC',
+    [date]
+  );
+
+  for (const existing of existingToday as any[]) {
+    const isSameMeal =
+      calories > 0 &&
+      existing.meal_type === mealType &&
+      (Math.abs(existing.calories - calories) < 30 || Math.abs(existing.protein_g - protein) < 5);
+
+    const isSameWorkout =
+      workoutNotes &&
+      existing.workout_notes &&
+      existing.workout_notes.toLowerCase().trim() === workoutNotes.toLowerCase().trim();
+
+    const isSameWeight =
+      weight !== null &&
+      existing.weight_kg !== null &&
+      Math.abs(existing.weight_kg - weight) < 0.2 &&
+      calories === 0 &&
+      !workoutNotes;
+
+    if (isSameMeal || isSameWorkout || isSameWeight) {
+      // Update existing entry instead of adding duplicate row
+      await db.runAsync(
+        `UPDATE fitness_logs SET
+          calories = CASE WHEN ? > 0 THEN ? ELSE calories END,
+          protein_g = CASE WHEN ? > 0 THEN ? ELSE protein_g END,
+          carbs_g = CASE WHEN ? > 0 THEN ? ELSE carbs_g END,
+          fat_g = CASE WHEN ? > 0 THEN ? ELSE fat_g END,
+          weight_kg = COALESCE(?, weight_kg),
+          workout_notes = COALESCE(?, workout_notes),
+          wind_down = COALESCE(?, wind_down),
+          meal_photo_uri = COALESCE(?, meal_photo_uri),
+          progress_photo_uri = COALESCE(?, progress_photo_uri)
+        WHERE id = ?`,
+        [
+          calories, calories,
+          protein, protein,
+          carbs, carbs,
+          fat, fat,
+          weight,
+          workoutNotes,
+          windDown,
+          mealPhotoUri ?? null,
+          progressPhotoUri ?? null,
+          existing.id,
+        ]
+      );
+      return existing.id;
+    }
+  }
+
   const logEntry: NewFitnessLog = {
     timestamp,
     date,
-    meal_type: extracted.nutrition?.meal_type || 'Lunch',
-    calories: extracted.nutrition?.calories || 0,
-    protein_g: extracted.nutrition?.protein_g || 0,
-    carbs_g: extracted.nutrition?.carbs_g || 0,
-    fat_g: extracted.nutrition?.fat_g || 0,
-    weight_kg: extracted.weight_kg ?? null,
-    workout_notes: extracted.workout?.workout_notes ?? null,
-    wind_down: extracted.recovery?.wind_down ?? null,
+    meal_type: mealType,
+    calories,
+    protein_g: protein,
+    carbs_g: carbs,
+    fat_g: fat,
+    weight_kg: weight,
+    workout_notes: workoutNotes,
+    wind_down: windDown,
     ai_feedback: [],
     meal_photo_uri: mealPhotoUri ?? null,
     progress_photo_uri: progressPhotoUri ?? null,

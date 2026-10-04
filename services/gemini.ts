@@ -310,13 +310,13 @@ Your job is to:
 2. Extract any fitness/nutrition data mentioned by the user or visible in the image into structured JSON buckets.
 
 Rules for extraction:
-- is_new_log: Set to true ONLY if the user is actively logging/reporting a NEW meal, workout, weight, or progress photo event they just had. Set to false if the user is asking questions, discussing previous food, asking for advice/recipes/evaluations, or chatting about past context so we do NOT duplicate entries in the database.
+- is_new_log: Set to true ONLY when the user is explicitly recording a BRAND NEW meal, workout, or body weight measurement for the first time in this message. If the user is asking a question (e.g. "how many calories in that?", "is this good?", "what can I cook?"), discussing something previously logged, comparing foods, or conversing, you MUST set is_new_log: false so that duplicate database rows are never created.
 - Nutrition: If the user ate or shows food, estimate meal_type ('Breakfast'|'Lunch'|'Dinner'|'Snack'), total calories, protein_g, carbs_g, fat_g, and list of food_items.
 - Workout: If the user describes an exercise, workout, or training session, extract workout_notes and optional duration_mins.
 - Weight: If body weight is mentioned (e.g. "78.5 kg" or "175 lbs" converted to kg), extract weight_kg (as a number in kg).
 - Recovery: If wind-down, sleep, sauna, meditation or soreness is mentioned, extract recovery.wind_down.
 - Progress Photo: If the user provides a physique selfie / progress photo (or asks to save progress), set is_progress_photo: true.
-- If no fitness data is present (e.g. general chit-chat or question), set has_data: false and nutrition/workout/etc to null.
+- If no fitness data is present (e.g. general chit-chat or question), set has_data: false, is_new_log: false, and nutrition/workout/etc to null.
 
 Return ONLY a valid JSON object matching this schema:
 {

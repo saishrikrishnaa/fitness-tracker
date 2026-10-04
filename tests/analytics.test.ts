@@ -1,4 +1,4 @@
-﻿import React from 'react';
+import React from 'react';
 
 jest.mock('react-native', () => {
   const mockReact = require('react');
@@ -10,8 +10,24 @@ jest.mock('react-native', () => {
     },
     ScrollView: (props: any) => mockReact.createElement('ScrollView', props, props.children),
     RefreshControl: (props: any) => mockReact.createElement('RefreshControl', props, props.children),
+    TouchableOpacity: (props: any) => mockReact.createElement('TouchableOpacity', props, props.children),
+    Alert: {
+      alert: jest.fn(),
+    },
   };
 });
+
+jest.mock('expo-haptics', () => ({
+  impactAsync: jest.fn(),
+  notificationAsync: jest.fn(),
+  ImpactFeedbackStyle: { Medium: 'medium', Light: 'light', Heavy: 'heavy' },
+  NotificationFeedbackType: { Success: 'success', Error: 'error', Warning: 'warning' },
+}));
+
+jest.mock('lucide-react-native', () => ({
+  Trash2: () => null,
+  Sparkles: () => null,
+}));
 
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 44, bottom: 34, left: 0, right: 0 }),

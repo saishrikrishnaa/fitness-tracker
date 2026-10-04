@@ -10,6 +10,9 @@ import {
   getChatMessages,
   clearChatMessages,
   saveLogFromExtractedData,
+  deleteLogEntry,
+  clearAllFitnessLogs,
+  deduplicateFitnessLogs,
 } from '../db/database';
 import { savePhotoLocally } from '../services/storage';
 import { NewFitnessLog, ChatMessage, NewChatMessage, ChatExtractedData } from '../types/fitness';
@@ -399,6 +402,71 @@ describe('Database Operations', () => {
           null,
         ])
       );
+    });
+
+    it('updates existing log entry instead of inserting duplicate on same day meal', async () => {
+      const todayStr = new Date().toISOString().split('T')[0];
+      mockDb.getAllAsync.mockResolvedValueOnce([
+        {
+          id: 10,
+          date: todayStr,
+          meal_type: 'Lunch',
+          calories: 600,
+          protein_g: 40,
+          carbs_g: 50,
+          fat_g: 15,
+          workout_notes: null,
+          weight_kg: null,
+        },
+      ]);
+
+      const extracted: ChatExtractedData = {
+        has_data: true,
+        is_new_log: true,
+        nutrition: {
+          meal_type: 'Lunch',
+          calories: 620,
+          protein_g: 42,
+          carbs_g: 50,
+          fat_g: 15,
+        },
+      };
+
+      const result = await saveLogFromExtractedData(extracted, 'file:///new_lunch.jpg');
+      expect(result).toBe(10);
+      expect(mockDb.runAsync).toHaveBeenCalledWith(
+        expect.stringContaining('UPDATE fitness_logs SET'),
+        expect.arrayContaining([620, 620, 42, 42, 'file:///new_lunch.jpg', 10])
+      );
+    });
+  });
+
+  describe('Deduplication and Deletion Helpers', () => {
+    it('deletes a log entry by ID', async () => {
+      await deleteLogEntry(5);
+      expect(mockDb.runAsync).toHaveBeenCalledWith(
+        'DELETE FROM fitness_logs WHERE id = ?',
+        [5]
+      );
+    });
+
+    it('clears all fitness logs', async () => {
+      await clearAllFitnessLogs();
+      expect(mockDb.execAsync).toHaveBeenCalledWith('DELETE FROM fitness_logs');
+    });
+
+    it('detects and removes duplicate logs preserving the latest entry', async () => {
+      mockDb.getAllAsync.mockResolvedValueOnce([
+        { id: 4, date: '2026-10-04', meal_type: 'Lunch', calories: 600, workout_notes: '', weight_kg: null },
+        { id: 3, date: '2026-10-04', meal_type: 'Lunch', calories: 600, workout_notes: '', weight_kg: null },
+        { id: 2, date: '2026-10-04', meal_type: 'Dinner', calories: 800, workout_notes: '', weight_kg: null },
+        { id: 1, date: '2026-10-04', meal_type: 'Lunch', calories: 600, workout_notes: '', weight_kg: null },
+      ]);
+
+      const removed = await deduplicateFitnessLogs();
+      expect(removed).toBe(2);
+      expect(mockDb.runAsync).toHaveBeenCalledWith('DELETE FROM fitness_logs WHERE id = ?', [3]);
+      expect(mockDb.runAsync).toHaveBeenCalledWith('DELETE FROM fitness_logs WHERE id = ?', [1]);
     });
   });
 });
