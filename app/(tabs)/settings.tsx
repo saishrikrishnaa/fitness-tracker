@@ -19,6 +19,7 @@ import {
   Save,
   CheckCircle,
   Zap,
+  Fingerprint,
 } from 'lucide-react-native';
 import { GlassCard } from '../../components/GlassCard';
 import { COLORS } from '../../constants/theme';
@@ -36,18 +37,13 @@ export function validatePinFormat(pin: string): boolean {
 export default function SettingsScreen(): JSX.Element {
   const insets = useSafeAreaInsets();
   const [apiKey, setApiKeyState] = useState('');
-  const [vaultPin, setVaultPinState] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
   const [savingKey, setSavingKey] = useState(false);
-  const [savingPin, setSavingPin] = useState(false);
 
   const loadSettings = useCallback(async () => {
     try {
       const storedKey = await getApiKey();
       if (storedKey) setApiKeyState(storedKey);
-
-      const storedPin = await getVaultPin();
-      if (storedPin) setVaultPinState(storedPin);
     } catch {
       // Retain existing state
     }
@@ -78,32 +74,6 @@ export default function SettingsScreen(): JSX.Element {
       Alert.alert('Error', 'Failed to save API key.');
     } finally {
       setSavingKey(false);
-    }
-  };
-
-  const handleSavePin = async () => {
-    if (!validatePinFormat(vaultPin)) {
-      try {
-        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      } catch {}
-      Alert.alert('Invalid PIN', 'PIN must be exactly 4 numeric digits (e.g. 1234).');
-      return;
-    }
-
-    setSavingPin(true);
-    try {
-      await setVaultPin(vaultPin);
-      try {
-        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      } catch {}
-      Alert.alert('Success', 'Progress Vault PIN updated successfully.');
-    } catch (error) {
-      try {
-        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      } catch {}
-      Alert.alert('Error', 'Failed to update PIN.');
-    } finally {
-      setSavingPin(false);
     }
   };
 
@@ -167,42 +137,23 @@ export default function SettingsScreen(): JSX.Element {
 
       <GlassCard style={styles.card}>
         <View style={styles.cardHeader}>
-          <View style={styles.iconContainer}>
-            <Shield color={COLORS.secondary} size={20} />
+          <View style={[styles.iconContainer, { backgroundColor: 'rgba(6, 182, 212, 0.12)' }]}>
+            <Fingerprint color={COLORS.primary} size={20} />
           </View>
           <View style={styles.cardHeaderText}>
-            <Text style={styles.cardTitle}>Vault Security PIN</Text>
+            <Text style={styles.cardTitle}>Vault Biometric Protection</Text>
             <Text style={styles.cardDescription}>
-              4-digit passcode protecting your private progress photos
+              Secured directly with your smartphone's native fingerprint and Face ID sensors
             </Text>
           </View>
         </View>
 
-        <View style={styles.inputContainer}>
-          <TextInput
-            testID="pin-input"
-            style={[styles.input, styles.pinInput]}
-            value={vaultPin}
-            onChangeText={setVaultPinState}
-            placeholder="1234"
-            placeholderTextColor={COLORS.textMuted}
-            keyboardType="number-pad"
-            maxLength={4}
-            secureTextEntry={false}
-          />
-        </View>
-
-        <TouchableOpacity
-          testID="save-pin-btn"
-          style={[styles.saveButton, styles.secondarySaveButton]}
-          onPress={handleSavePin}
-          disabled={savingPin}
-        >
-          <Save color="#FFF" size={18} />
-          <Text style={[styles.saveButtonText, { color: '#FFF' }]}>
-            {savingPin ? 'Updating...' : 'Update Vault PIN'}
+        <View style={styles.biometricStatusBox}>
+          <Shield color={COLORS.secondary} size={18} />
+          <Text style={styles.biometricStatusText}>
+            Protected by Phone Biometrics & Hardware Keystore
           </Text>
-        </TouchableOpacity>
+        </View>
       </GlassCard>
 
       <GlassCard style={styles.card}>
@@ -297,6 +248,23 @@ const styles = StyleSheet.create({
     height: 44,
     color: COLORS.text,
     fontSize: 14,
+  },
+  biometricStatusBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  biometricStatusText: {
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    fontWeight: '500',
+    flex: 1,
   },
   pinInput: {
     fontSize: 18,

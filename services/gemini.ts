@@ -53,6 +53,7 @@ export function parseCoachResponse(jsonText: string): CoachAnalysisResponse | nu
 
     const extracted_data: ChatExtractedData = {
       has_data: Boolean(rawExtracted.has_data),
+      is_new_log: rawExtracted.is_new_log !== undefined ? Boolean(rawExtracted.is_new_log) : true,
     };
 
     if (rawExtracted.nutrition && typeof rawExtracted.nutrition === 'object') {
@@ -309,6 +310,7 @@ Your job is to:
 2. Extract any fitness/nutrition data mentioned by the user or visible in the image into structured JSON buckets.
 
 Rules for extraction:
+- is_new_log: Set to true ONLY if the user is actively logging/reporting a NEW meal, workout, weight, or progress photo event they just had. Set to false if the user is asking questions, discussing previous food, asking for advice/recipes/evaluations, or chatting about past context so we do NOT duplicate entries in the database.
 - Nutrition: If the user ate or shows food, estimate meal_type ('Breakfast'|'Lunch'|'Dinner'|'Snack'), total calories, protein_g, carbs_g, fat_g, and list of food_items.
 - Workout: If the user describes an exercise, workout, or training session, extract workout_notes and optional duration_mins.
 - Weight: If body weight is mentioned (e.g. "78.5 kg" or "175 lbs" converted to kg), extract weight_kg (as a number in kg).
@@ -321,6 +323,7 @@ Return ONLY a valid JSON object matching this schema:
   "coach_response": string,
   "extracted_data": {
     "has_data": boolean,
+    "is_new_log": boolean,
     "nutrition": {
       "meal_type": "Breakfast" | "Lunch" | "Dinner" | "Snack",
       "calories": number,
@@ -343,7 +346,7 @@ Return ONLY a valid JSON object matching this schema:
 
 export async function sendChatMessageToCoach(
   message: string,
-  imageUri?: string | null,
+  imageUris?: string[] | string | null,
   history?: { role: 'user' | 'model'; text: string }[]
 ): Promise<CoachAnalysisResponse> {
   const apiKey = await getApiKey();
@@ -351,21 +354,38 @@ export async function sendChatMessageToCoach(
     throw new Error('Missing Gemini API Key. Please configure it in Settings.');
   }
 
-  const hasPhoto = Boolean(imageUri);
+  const normalizedUris: string[] = Array.isArray(imageUris)
+    ? imageUris.filter((u) => Boolean(u && typeof u === 'string'))
+    : imageUris
+    ? [imageUris]
+    : [];
+
+  const hasPhotos = normalizedUris.length > 0;
   const hasMessage = Boolean(message && message.trim().length > 0);
 
-  if (!hasPhoto && !hasMessage) {
+  if (!hasPhotos && !hasMessage) {
     throw new Error('Please provide a message or photo to send to Fuel Coach.');
   }
 
-  let base64Image: string | null = null;
-  let mimeType = 'image/jpeg';
+  const currentParts: any[] = [];
 
-  if (imageUri) {
-    base64Image = await FileSystem.readAsStringAsync(imageUri, {
+  for (const uri of normalizedUris) {
+    const base64Image = await FileSystem.readAsStringAsync(uri, {
       encoding: FileSystem.EncodingType.Base64,
     });
-    mimeType = getMimeType(imageUri);
+    const mimeType = getMimeType(uri);
+    currentParts.push({
+      inline_data: {
+        mime_type: mimeType,
+        data: base64Image,
+      },
+    });
+  }
+
+  if (hasMessage) {
+    currentParts.push({ text: message });
+  } else if (hasPhotos) {
+    currentParts.push({ text: 'Analyze the attached photos and provide fitness coaching advice.' });
   }
 
   const contents: any[] = [];
@@ -380,27 +400,12 @@ export async function sendChatMessageToCoach(
     }
   }
 
-  const currentParts: any[] = [];
-  if (base64Image) {
-    currentParts.push({
-      inline_data: {
-        mime_type: mimeType,
-        data: base64Image,
-      },
-    });
-  }
-  if (hasMessage) {
-    currentParts.push({ text: message });
-  } else if (base64Image) {
-    currentParts.push({ text: 'Analyze this photo and provide fitness coaching advice.' });
-  }
-
   contents.push({
     role: 'user',
     parts: currentParts,
   });
 
-  const modelsToTry = await getAvailableGeminiModels(apiKey, hasPhoto);
+  const modelsToTry = await getAvailableGeminiModels(apiKey, hasPhotos);
   let lastError: Error | null = null;
 
   for (const model of modelsToTry) {

@@ -13,12 +13,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
 import * as LocalAuthentication from 'expo-local-authentication';
 import * as Haptics from 'expo-haptics';
-import { Lock, Fingerprint, Delete, Image as ImageIcon, Scale, Calendar } from 'lucide-react-native';
+import { Lock, Fingerprint, Image as ImageIcon, Scale, Calendar, ShieldCheck } from 'lucide-react-native';
 import { GlassCard } from '../../components/GlassCard';
 import { COLORS } from '../../constants/theme';
 import { FitnessLogEntry } from '../../types/fitness';
 import { getProgressPhotos } from '../../db/database';
-import { getVaultPin } from '../../services/secureStore';
 
 export default function VaultScreen(): JSX.Element {
   const insets = useSafeAreaInsets();
@@ -26,15 +25,12 @@ export default function VaultScreen(): JSX.Element {
   const columnWidth = (width - 52) / 2;
 
   const [isUnlocked, setIsUnlocked] = useState(false);
-  const [pin, setPin] = useState('');
-  const [storedPin, setStoredPin] = useState('1234');
   const [photos, setPhotos] = useState<FitnessLogEntry[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [biometricType, setBiometricType] = useState<'fingerprint' | 'facial' | 'biometric' | 'none'>('none');
   const [hasBiometrics, setHasBiometrics] = useState(false);
 
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoPromptRef = useRef(false);
 
   const checkBiometrics = useCallback(async () => {
@@ -62,15 +58,6 @@ export default function VaultScreen(): JSX.Element {
     }
   }, []);
 
-  const loadStoredPin = useCallback(async () => {
-    try {
-      const pinValue = await getVaultPin();
-      setStoredPin(pinValue);
-    } catch {
-      setStoredPin('1234');
-    }
-  }, []);
-
   const loadPhotos = useCallback(async () => {
     try {
       const data = await getProgressPhotos();
@@ -81,127 +68,66 @@ export default function VaultScreen(): JSX.Element {
   }, []);
 
   useEffect(() => {
-    loadStoredPin();
     checkBiometrics();
-  }, [loadStoredPin, checkBiometrics]);
+  }, [checkBiometrics]);
 
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
+  const handleBiometricAuth = useCallback(async () => {
+    try {
+      const promptLabel =
+        biometricType === 'fingerprint'
+          ? 'Unlock Progress Vault with Fingerprint'
+          : biometricType === 'facial'
+          ? 'Unlock Progress Vault with Face ID'
+          : 'Unlock Progress Vault';
+
+      const result = await LocalAuthentication.authenticateAsync({
+        promptMessage: promptLabel,
+        cancelLabel: 'Cancel',
+        fallbackLabel: 'Use Device Passcode',
+        disableDeviceFallback: false,
+      });
+
+      if (result.success) {
+        try {
+          await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        } catch {}
+        setIsUnlocked(true);
+        setErrorMessage(null);
+        loadPhotos();
+      } else {
+        try {
+          await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        } catch {}
+        setErrorMessage('Authentication canceled or not recognized.');
       }
-    };
-  }, []);
+    } catch {
+      setErrorMessage('Biometric authentication failed. Tap below to retry.');
+    }
+  }, [biometricType, loadPhotos]);
 
   useFocusEffect(
     useCallback(() => {
-      loadStoredPin();
       checkBiometrics();
       if (isUnlocked) {
         loadPhotos();
       } else if (!autoPromptRef.current) {
         autoPromptRef.current = true;
-        // Optionally prompt on first screen entry if hardware is enrolled
-        LocalAuthentication.isEnrolledAsync().then((enrolled) => {
-          if (enrolled) {
-            handleBiometricAuth();
-          }
-        }).catch(() => {});
+        LocalAuthentication.isEnrolledAsync()
+          .then((enrolled) => {
+            if (enrolled) {
+              handleBiometricAuth();
+            }
+          })
+          .catch(() => {});
       }
-    }, [isUnlocked, loadPhotos, loadStoredPin, checkBiometrics])
+    }, [isUnlocked, loadPhotos, checkBiometrics, handleBiometricAuth])
   );
 
-  const unlockVault = async () => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-    }
-    try {
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    } catch {}
-    setIsUnlocked(true);
-    setPin('');
-    setErrorMessage(null);
-    loadPhotos();
-  };
-
-  const handleKeyPress = (num: string) => {
-    if (pin.length >= 4) return;
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch {}
-    const newPin = pin + num;
-    setPin(newPin);
-    setErrorMessage(null);
-
-    if (newPin.length === 4) {
-      if (newPin === storedPin) {
-        unlockVault();
-      } else {
-        try {
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-        } catch {}
-        setErrorMessage('Incorrect PIN. Try again.');
-        if (timerRef.current) {
-          clearTimeout(timerRef.current);
-        }
-        timerRef.current = setTimeout(() => {
-          setPin('');
-        }, 500);
-      }
-    }
-  };
-
-  const handleDelete = () => {
-    if (pin.length === 0) return;
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch {}
-    setPin(pin.slice(0, -1));
-    setErrorMessage(null);
-  };
-
-  const handleBiometricAuth = async () => {
-    try {
-      const hasHardware = await LocalAuthentication.hasHardwareAsync();
-      const isEnrolled = await LocalAuthentication.isEnrolledAsync();
-
-      if (!hasHardware || !isEnrolled) {
-        setErrorMessage('Biometrics not available or enrolled on this device');
-        return;
-      }
-
-      const promptLabel = biometricType === 'fingerprint'
-        ? 'Unlock Progress Vault with Fingerprint'
-        : 'Unlock Progress Vault';
-
-      const result = await LocalAuthentication.authenticateAsync({
-        promptMessage: promptLabel,
-        cancelLabel: 'Cancel',
-        fallbackLabel: 'Use PIN',
-        disableDeviceFallback: false,
-      });
-
-      if (result.success) {
-        unlockVault();
-      } else {
-        try {
-          await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-        } catch {}
-      }
-    } catch {
-      setErrorMessage('Biometric authentication failed');
-    }
-  };
-
   const handleLock = async () => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-    }
     try {
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     } catch {}
     setIsUnlocked(false);
-    setPin('');
     setErrorMessage(null);
   };
 
@@ -213,15 +139,15 @@ export default function VaultScreen(): JSX.Element {
 
   const getSubtitleText = () => {
     if (biometricType === 'fingerprint') {
-      return 'Enter 4-digit PIN or scan fingerprint to unlock';
+      return 'Secured with Fingerprint Biometrics';
     }
     if (biometricType === 'facial') {
-      return 'Enter 4-digit PIN or use Face ID to unlock';
+      return 'Secured with Face ID Biometrics';
     }
     if (hasBiometrics) {
-      return 'Enter 4-digit PIN or use biometrics to unlock';
+      return 'Secured with Phone Biometrics';
     }
-    return 'Enter 4-digit PIN passcode to unlock';
+    return 'Secured by Phone Device Lock';
   };
 
   const renderPhotoItem = ({ item }: { item: FitnessLogEntry }) => {
@@ -261,88 +187,43 @@ export default function VaultScreen(): JSX.Element {
 
   if (!isUnlocked) {
     return (
-      <View style={[styles.container, { paddingTop: insets.top + 20 }]}>
-        <View style={styles.lockHeader}>
+      <View style={[styles.container, { paddingTop: insets.top + 40 }]}>
+        <View style={styles.lockCenterContainer}>
           <View style={styles.lockIconCircle}>
-            <Lock color={COLORS.primary} size={32} />
+            <Lock color={COLORS.primary} size={38} />
           </View>
           <Text style={styles.lockTitle}>Progress Vault</Text>
           <Text style={styles.lockSubtitle}>{getSubtitleText()}</Text>
-        </View>
 
-        <View style={styles.pinIndicatorContainer}>
-          {[0, 1, 2, 3].map((index) => (
-            <View
-              key={index}
-              style={[
-                styles.pinDot,
-                pin.length > index && styles.pinDotFilled,
-                errorMessage && styles.pinDotError,
-              ]}
-            />
-          ))}
-        </View>
+          <GlassCard style={styles.securityInfoCard}>
+            <View style={styles.securityRow}>
+              <ShieldCheck color={COLORS.success} size={22} />
+              <View style={styles.securityTextContainer}>
+                <Text style={styles.securityHeading}>Hardware Keychain Guard</Text>
+                <Text style={styles.securityDescription}>
+                  Your physique photos are locked on-device and unlocked using your phone's native biometrics.
+                </Text>
+              </View>
+            </View>
+          </GlassCard>
 
-        {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
+          {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
 
-        {hasBiometrics ? (
           <TouchableOpacity
             testID="quick-biometric-btn"
-            style={styles.quickBiometricButton}
+            style={styles.primaryBiometricButton}
             onPress={handleBiometricAuth}
-            activeOpacity={0.8}
+            activeOpacity={0.85}
           >
-            <Fingerprint color={COLORS.primary} size={18} />
-            <Text style={styles.quickBiometricText}>
-              {biometricType === 'fingerprint' ? 'Touch Fingerprint Sensor' : 'Unlock with Biometrics'}
+            <Fingerprint color="#000" size={26} />
+            <Text style={styles.primaryBiometricText}>
+              {biometricType === 'fingerprint'
+                ? 'Scan Fingerprint to Unlock'
+                : biometricType === 'facial'
+                ? 'Use Face ID to Unlock'
+                : 'Unlock with Phone Biometrics'}
             </Text>
           </TouchableOpacity>
-        ) : null}
-
-        <View style={styles.keypad}>
-          {[
-            ['1', '2', '3'],
-            ['4', '5', '6'],
-            ['7', '8', '9'],
-          ].map((row, rowIndex) => (
-            <View key={rowIndex} style={styles.keypadRow}>
-              {row.map((digit) => (
-                <TouchableOpacity
-                  key={digit}
-                  style={styles.keypadKey}
-                  onPress={() => handleKeyPress(digit)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.keypadKeyText}>{digit}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          ))}
-          <View style={styles.keypadRow}>
-            <TouchableOpacity
-              testID="biometric-keypad-btn"
-              style={styles.keypadKey}
-              onPress={handleBiometricAuth}
-              activeOpacity={0.7}
-            >
-              <Fingerprint color={COLORS.primary} size={28} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.keypadKey}
-              onPress={() => handleKeyPress('0')}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.keypadKeyText}>0</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              testID="delete-pin-btn"
-              style={styles.keypadKey}
-              onPress={handleDelete}
-              activeOpacity={0.7}
-            >
-              <Delete color={COLORS.textSecondary} size={24} />
-            </TouchableOpacity>
-          </View>
         </View>
       </View>
     );
@@ -386,7 +267,7 @@ export default function VaultScreen(): JSX.Element {
               <ImageIcon color={COLORS.textMuted} size={48} />
               <Text style={styles.emptyTitle}>No Progress Photos</Text>
               <Text style={styles.emptySubtitle}>
-                Add progress photos to your daily fitness logs to track your physique transformation over time.
+                Add progress photos in Fuel Coach chat to track your physique transformation over time.
               </Text>
             </GlassCard>
           </View>
@@ -406,24 +287,25 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.background,
     paddingHorizontal: 16,
   },
-  lockHeader: {
+  lockCenterContainer: {
     alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
     marginTop: 40,
-    marginBottom: 30,
   },
   lockIconCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
     backgroundColor: 'rgba(6, 182, 212, 0.15)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(6, 182, 212, 0.3)',
+    marginBottom: 20,
+    borderWidth: 1.5,
+    borderColor: 'rgba(6, 182, 212, 0.35)',
   },
   lockTitle: {
-    fontSize: 24,
+    fontSize: 26,
     fontWeight: '800',
     color: COLORS.text,
     marginBottom: 6,
@@ -432,90 +314,70 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: COLORS.textSecondary,
     textAlign: 'center',
+    marginBottom: 24,
   },
-  pinIndicatorContainer: {
+  securityInfoCard: {
+    width: '100%',
+    padding: 16,
+    marginBottom: 32,
+  },
+  securityRow: {
     flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  securityTextContainer: {
+    flex: 1,
+  },
+  securityHeading: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: COLORS.text,
+    marginBottom: 4,
+  },
+  securityDescription: {
+    fontSize: 12,
+    color: COLORS.textSecondary,
+    lineHeight: 18,
+  },
+  primaryBiometricButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'center',
-    gap: 16,
-    marginBottom: 20,
-  },
-  pinDot: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    borderWidth: 1.5,
-    borderColor: COLORS.textMuted,
-    backgroundColor: 'transparent',
-  },
-  pinDotFilled: {
     backgroundColor: COLORS.primary,
-    borderColor: COLORS.primary,
+    borderRadius: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    width: '100%',
+    gap: 12,
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
   },
-  pinDotError: {
-    backgroundColor: COLORS.danger,
-    borderColor: COLORS.danger,
+  primaryBiometricText: {
+    color: '#000',
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: -0.2,
   },
   errorText: {
-    color: COLORS.danger,
+    color: '#EF4444',
     fontSize: 13,
     textAlign: 'center',
-    marginBottom: 16,
-  },
-  quickBiometricButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: 'rgba(6, 182, 212, 0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(6, 182, 212, 0.3)',
-    borderRadius: 20,
-    paddingVertical: 10,
-    paddingHorizontal: 18,
-    alignSelf: 'center',
     marginBottom: 20,
-  },
-  quickBiometricText: {
-    color: COLORS.primary,
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  keypad: {
-    maxWidth: 280,
-    alignSelf: 'center',
-    width: '100%',
-    marginTop: 'auto',
-    marginBottom: 40,
-  },
-  keypadRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 16,
-  },
-  keypadKey: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  keypadKeyText: {
-    color: COLORS.text,
-    fontSize: 26,
-    fontWeight: '600',
+    fontWeight: '500',
   },
   unlockedHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
-    paddingHorizontal: 4,
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    marginBottom: 12,
   },
   title: {
-    fontSize: 28,
+    fontSize: 24,
     fontWeight: '800',
     color: COLORS.text,
   },
@@ -528,60 +390,59 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 8,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.15)',
+    borderColor: 'rgba(255, 255, 255, 0.1)',
   },
   lockButtonText: {
     color: COLORS.text,
     fontSize: 13,
     fontWeight: '600',
   },
-  columnWrapper: {
-    justifyContent: 'space-between',
-    marginBottom: 16,
-  },
   galleryContent: {
     paddingBottom: 40,
   },
+  columnWrapper: {
+    gap: 12,
+    marginBottom: 12,
+  },
   photoCard: {
-    padding: 0,
-    overflow: 'hidden',
-    borderRadius: 14,
+    padding: 8,
+    borderRadius: 16,
   },
   photoImage: {
     width: '100%',
-    borderTopLeftRadius: 14,
-    borderTopRightRadius: 14,
-    backgroundColor: 'rgba(0,0,0,0.3)',
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
   },
   photoPlaceholder: {
     width: '100%',
-    justifyContent: 'center',
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    justifyContent: 'center',
   },
   photoMeta: {
-    padding: 10,
+    marginTop: 8,
     gap: 4,
   },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 4,
   },
   photoDate: {
-    color: COLORS.text,
-    fontSize: 12,
-    fontWeight: '600',
+    color: COLORS.textSecondary,
+    fontSize: 11,
+    fontWeight: '500',
   },
   photoWeight: {
     color: COLORS.secondary,
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: '600',
   },
   photoNote: {
     color: COLORS.textMuted,
@@ -589,24 +450,25 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   emptyContainer: {
-    paddingTop: 40,
+    marginTop: 60,
     alignItems: 'center',
   },
   emptyCard: {
-    width: '100%',
     alignItems: 'center',
-    padding: 28,
-    gap: 12,
+    padding: 32,
+    width: '100%',
   },
   emptyTitle: {
     color: COLORS.text,
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '700',
+    marginTop: 16,
+    marginBottom: 8,
   },
   emptySubtitle: {
     color: COLORS.textSecondary,
     fontSize: 13,
     textAlign: 'center',
-    lineHeight: 18,
+    lineHeight: 20,
   },
 });

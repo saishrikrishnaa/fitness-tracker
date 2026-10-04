@@ -153,11 +153,34 @@ export function parseDbRowToChatMessage(row: any): ChatMessage {
   } catch {
     extracted = null;
   }
+
+  let singleImageUri: string | null = null;
+  let imageUris: string[] | undefined = undefined;
+
+  if (row.image_uri && typeof row.image_uri === 'string') {
+    try {
+      if (row.image_uri.startsWith('[')) {
+        const parsed = JSON.parse(row.image_uri);
+        if (Array.isArray(parsed)) {
+          imageUris = parsed.map(String);
+          singleImageUri = imageUris[0] || null;
+        }
+      }
+    } catch {
+      // Not a JSON array
+    }
+    if (!singleImageUri) {
+      singleImageUri = row.image_uri;
+      imageUris = [row.image_uri];
+    }
+  }
+
   return {
     id: row.id,
     sender: row.sender,
     text: row.text,
-    image_uri: row.image_uri || null,
+    image_uri: singleImageUri,
+    image_uris: imageUris,
     extracted_data: extracted,
     created_at: row.created_at,
   };
@@ -166,12 +189,16 @@ export function parseDbRowToChatMessage(row: any): ChatMessage {
 export async function saveChatMessage(message: NewChatMessage): Promise<number> {
   const db = await getDb();
   const extractedJson = message.extracted_data ? JSON.stringify(message.extracted_data) : null;
+  const imageField = message.image_uris && message.image_uris.length > 0
+    ? JSON.stringify(message.image_uris)
+    : message.image_uri ?? null;
+
   const result = await db.runAsync(
     `INSERT INTO chat_messages (sender, text, image_uri, extracted_data) VALUES (?, ?, ?, ?)`,
     [
       message.sender,
       message.text,
-      message.image_uri ?? null,
+      imageField,
       extractedJson,
     ]
   );
@@ -194,7 +221,7 @@ export async function saveLogFromExtractedData(
   mealPhotoUri?: string | null,
   progressPhotoUri?: string | null
 ): Promise<number | null> {
-  if (!extracted.has_data) {
+  if (!extracted.has_data || extracted.is_new_log === false) {
     return null;
   }
   const now = new Date();

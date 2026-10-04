@@ -36,6 +36,7 @@ export interface NewFitnessLog {
 
 export interface ChatExtractedData {
   has_data: boolean;
+  is_new_log?: boolean;
   nutrition?: {
     meal_type: MealType;
     calories: number;
@@ -60,6 +61,7 @@ export interface ChatMessage {
   sender: 'user' | 'coach';
   text: string;
   image_uri: string | null;
+  image_uris?: string[];
   extracted_data: ChatExtractedData | null;
   created_at: string;
 }
@@ -68,6 +70,7 @@ export interface NewChatMessage {
   sender: 'user' | 'coach';
   text: string;
   image_uri?: string | null;
+  image_uris?: string[];
   extracted_data?: ChatExtractedData | null;
 }
 

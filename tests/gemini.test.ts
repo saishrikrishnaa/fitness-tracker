@@ -101,6 +101,7 @@ describe('Coach Response Parser (parseCoachResponse)', () => {
       coach_response: 'Great high-protein lunch and solid bench workout!',
       extracted_data: {
         has_data: true,
+        is_new_log: true,
         nutrition: {
           meal_type: 'Lunch',
           calories: 650,
@@ -129,6 +130,7 @@ describe('Coach Response Parser (parseCoachResponse)', () => {
       coach_response: 'Looking lean!',
       extracted_data: {
         has_data: true,
+        is_new_log: true,
         nutrition: null,
         workout: null,
         weight_kg: 75,
@@ -143,6 +145,7 @@ describe('Coach Response Parser (parseCoachResponse)', () => {
       coach_response: 'To build muscle effectively, aim for 1.6-2.2g of protein per kg of bodyweight.',
       extracted_data: {
         has_data: false,
+        is_new_log: false,
         nutrition: null,
         workout: null,
         weight_kg: null,
@@ -156,6 +159,7 @@ describe('Coach Response Parser (parseCoachResponse)', () => {
       coach_response: 'To build muscle effectively, aim for 1.6-2.2g of protein per kg of bodyweight.',
       extracted_data: {
         has_data: false,
+        is_new_log: false,
         nutrition: null,
         workout: null,
         weight_kg: null,
@@ -506,6 +510,7 @@ describe('sendChatMessageToCoach', () => {
       coach_response: 'Awesome chest workout and nutritious lunch!',
       extracted_data: {
         has_data: true,
+        is_new_log: true,
         nutrition: {
           meal_type: 'Lunch',
           calories: 600,
@@ -726,5 +731,68 @@ describe('sendChatMessageToCoach', () => {
     await expect(sendChatMessageToCoach('Hello')).rejects.toThrow(
       'Invalid Gemini API Key. Please verify your API key in Settings.'
     );
+  });
+
+  it('supports sending multiple photos in a single turn to Gemini', async () => {
+    await setApiKey('test-key');
+
+    const mockResponsePayload = {
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                text: JSON.stringify({
+                  coach_response: 'Great meal and post-workout physique look!',
+                  extracted_data: {
+                    has_data: true,
+                    is_new_log: true,
+                    nutrition: {
+                      meal_type: 'Dinner',
+                      calories: 800,
+                      protein_g: 60,
+                      carbs_g: 70,
+                      fat_g: 25,
+                      food_items: ['Steak', 'Mashed potatoes', 'Salad'],
+                    },
+                    workout: null,
+                    weight_kg: 80,
+                    recovery: null,
+                    is_progress_photo: true,
+                  },
+                }),
+              },
+            ],
+          },
+        },
+      ],
+    };
+
+    global.fetch = jest.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/models?')) return { ok: false };
+      return {
+        ok: true,
+        json: async () => mockResponsePayload,
+      };
+    });
+
+    const result = await sendChatMessageToCoach(
+      'Logged my dinner plate and updated physique pic',
+      ['file:///meal_plate.jpg', 'file:///physique_front.jpg']
+    );
+
+    expect(result.coach_response).toBe('Great meal and post-workout physique look!');
+    expect(result.extracted_data.has_data).toBe(true);
+    expect(result.extracted_data.nutrition?.meal_type).toBe('Dinner');
+    expect(result.extracted_data.is_progress_photo).toBe(true);
+
+    const fetchCall = (global.fetch as jest.Mock).mock.calls.find((c) =>
+      c[0].includes('gemini-1.5-flash:generateContent')
+    );
+    expect(fetchCall).toBeDefined();
+    const requestBody = JSON.parse(fetchCall[1].body);
+    const parts = requestBody.contents[0].parts;
+    // Should have 1 text part + 2 inline_data parts
+    expect(parts.filter((p: any) => p.inline_data)).toHaveLength(2);
   });
 });

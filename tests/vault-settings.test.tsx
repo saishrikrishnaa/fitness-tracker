@@ -204,14 +204,14 @@ describe('Task 6: Biometric Progress Vault & Settings Screen', () => {
       const authResult = await LocalAuthentication.authenticateAsync({
         promptMessage: 'Unlock Progress Vault with Fingerprint',
         cancelLabel: 'Cancel',
-        fallbackLabel: 'Use PIN',
+        fallbackLabel: 'Use Device Passcode',
         disableDeviceFallback: false,
       });
       expect(authResult.success).toBe(true);
       expect(LocalAuthentication.authenticateAsync).toHaveBeenCalledWith({
         promptMessage: 'Unlock Progress Vault with Fingerprint',
         cancelLabel: 'Cancel',
-        fallbackLabel: 'Use PIN',
+        fallbackLabel: 'Use Device Passcode',
         disableDeviceFallback: false,
       });
     });

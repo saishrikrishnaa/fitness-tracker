@@ -52,7 +52,7 @@ export default function LogScreen(): JSX.Element {
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
-  const [attachedImage, setAttachedImage] = useState<string | null>(null);
+  const [attachedImages, setAttachedImages] = useState<string[]>([]);
   const [isSending, setIsSending] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
 
@@ -108,23 +108,30 @@ export default function LogScreen(): JSX.Element {
         const pickRes = await ImagePicker.launchImageLibraryAsync({
           mediaTypes: ImagePicker.MediaTypeOptions.Images,
           quality: 0.8,
+          allowsMultipleSelection: true,
+          selectionLimit: 6,
         });
-        if (!pickRes.canceled && pickRes.assets[0]) {
-          setAttachedImage(pickRes.assets[0].uri);
+        if (!pickRes.canceled && pickRes.assets && pickRes.assets.length > 0) {
+          const uris = pickRes.assets.map((a) => a.uri).filter(Boolean);
+          setAttachedImages((prev) => [...prev, ...uris].slice(0, 6));
         }
         return;
       }
       const res = await ImagePicker.launchCameraAsync({ quality: 0.8 });
-      if (!res.canceled && res.assets[0]) {
-        setAttachedImage(res.assets[0].uri);
+      if (!res.canceled && res.assets && res.assets.length > 0) {
+        const uri = res.assets[0].uri;
+        setAttachedImages((prev) => [...prev, uri].slice(0, 6));
       }
     } catch {
       const pickRes = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         quality: 0.8,
+        allowsMultipleSelection: true,
+        selectionLimit: 6,
       });
-      if (!pickRes.canceled && pickRes.assets[0]) {
-        setAttachedImage(pickRes.assets[0].uri);
+      if (!pickRes.canceled && pickRes.assets && pickRes.assets.length > 0) {
+        const uris = pickRes.assets.map((a) => a.uri).filter(Boolean);
+        setAttachedImages((prev) => [...prev, ...uris].slice(0, 6));
       }
     }
   };
@@ -134,20 +141,27 @@ export default function LogScreen(): JSX.Element {
       const pickRes = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         quality: 0.8,
+        allowsMultipleSelection: true,
+        selectionLimit: 6,
       });
-      if (!pickRes.canceled && pickRes.assets[0]) {
-        setAttachedImage(pickRes.assets[0].uri);
+      if (!pickRes.canceled && pickRes.assets && pickRes.assets.length > 0) {
+        const uris = pickRes.assets.map((a) => a.uri).filter(Boolean);
+        setAttachedImages((prev) => [...prev, ...uris].slice(0, 6));
       }
     } catch (err: any) {
       Alert.alert('Error', err?.message || 'Failed to select image.');
     }
   };
 
+  const removeAttachedImage = (index: number) => {
+    setAttachedImages((prev) => prev.filter((_, i) => i !== index));
+  };
+
   const handleSendMessage = async () => {
     const userText = inputText.trim();
-    const imageUri = attachedImage;
+    const imagesToSend = [...attachedImages];
 
-    if (!userText && !imageUri) {
+    if (!userText && imagesToSend.length === 0) {
       return;
     }
     if (isSending) {
@@ -160,14 +174,15 @@ export default function LogScreen(): JSX.Element {
 
       // Clear input fields immediately for responsive feel
       setInputText('');
-      setAttachedImage(null);
+      setAttachedImages([]);
 
       // Optimistically append user message to local state
       const optimisticUserMsg: ChatMessage = {
         id: Date.now(),
         sender: 'user',
         text: userText,
-        image_uri: imageUri,
+        image_uri: imagesToSend[0] || null,
+        image_uris: imagesToSend,
         extracted_data: null,
         created_at: new Date().toISOString(),
       };
@@ -177,7 +192,8 @@ export default function LogScreen(): JSX.Element {
       await saveChatMessage({
         sender: 'user',
         text: userText,
-        image_uri: imageUri,
+        image_uri: imagesToSend[0] || null,
+        image_uris: imagesToSend,
       });
 
       // Build conversation history from recent messages (last 8)
@@ -185,22 +201,22 @@ export default function LogScreen(): JSX.Element {
         .slice(-8)
         .map((msg) => ({
           role: msg.sender === 'coach' ? ('model' as const) : ('user' as const),
-          text: msg.text || (msg.image_uri ? '[Image attached]' : ''),
+          text: msg.text || (msg.image_uris?.length || msg.image_uri ? '[Images attached]' : ''),
         }))
         .filter((msg) => Boolean(msg.text && msg.text.trim().length > 0));
 
-      // Query Gemini Coach
-      const coachResult = await sendChatMessageToCoach(userText, imageUri, history);
+      // Query Gemini Coach with all images
+      const coachResult = await sendChatMessageToCoach(userText, imagesToSend, history);
 
       let savedMealPhotoUri: string | null = null;
       let savedProgressPhotoUri: string | null = null;
 
-      // Check extracted data and persist media + fitness logs if data is present
+      // Check extracted data and persist media + fitness logs if data is present and it's a new log
       if (coachResult.extracted_data?.has_data) {
-        if (coachResult.extracted_data.is_progress_photo && imageUri) {
-          savedProgressPhotoUri = await savePhotoLocally(imageUri, 'progress');
-        } else if (coachResult.extracted_data.nutrition && imageUri) {
-          savedMealPhotoUri = await savePhotoLocally(imageUri, 'meals');
+        if (coachResult.extracted_data.is_progress_photo && imagesToSend.length > 0) {
+          savedProgressPhotoUri = await savePhotoLocally(imagesToSend[0], 'progress');
+        } else if (coachResult.extracted_data.nutrition && imagesToSend.length > 0) {
+          savedMealPhotoUri = await savePhotoLocally(imagesToSend[0], 'meals');
         }
 
         await saveLogFromExtractedData(
@@ -223,6 +239,7 @@ export default function LogScreen(): JSX.Element {
         sender: 'coach',
         text: coachResult.coach_response,
         image_uri: null,
+        image_uris: [],
         extracted_data: coachResult.extracted_data,
         created_at: new Date().toISOString(),
       };
@@ -232,7 +249,7 @@ export default function LogScreen(): JSX.Element {
       flatListRef.current?.scrollToEnd({ animated: true });
     } catch (err: any) {
       setInputText(userText);
-      setAttachedImage(imageUri);
+      setAttachedImages(imagesToSend);
       Alert.alert('Coach Error', err?.message || 'Failed to communicate with Fuel Coach.');
     } finally {
       setIsSending(false);
@@ -245,16 +262,34 @@ export default function LogScreen(): JSX.Element {
       ? new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       : '';
 
+    const messageImages = item.image_uris && item.image_uris.length > 0
+      ? item.image_uris
+      : item.image_uri
+      ? [item.image_uri]
+      : [];
+
     if (isUser) {
       return (
         <View style={styles.userMessageRow} testID="user-message-row">
           <View style={styles.userBubble} testID="user-message-bubble">
-            {item.image_uri && (
+            {messageImages.length === 1 && (
               <Image
-                source={{ uri: item.image_uri }}
+                source={{ uri: messageImages[0] }}
                 style={styles.messageImage}
                 testID="message-image-preview"
               />
+            )}
+            {messageImages.length > 1 && (
+              <View style={styles.multiImageGrid} testID="multi-message-image-grid">
+                {messageImages.map((uri, idx) => (
+                  <Image
+                    key={idx}
+                    source={{ uri }}
+                    style={styles.gridImage}
+                    testID={`message-image-preview-${idx}`}
+                  />
+                ))}
+              </View>
             )}
             {Boolean(item.text) && (
               <Text style={styles.userMessageText} testID="user-message-text">
@@ -366,21 +401,31 @@ export default function LogScreen(): JSX.Element {
 
       {/* Input Toolbar */}
       <View style={[styles.inputBarContainer, { paddingBottom: Math.max(insets.bottom, 12) }]}>
-        {attachedImage && (
-          <View style={styles.attachedImageWrapper} testID="attached-image-wrapper">
-            <Image
-              source={{ uri: attachedImage }}
-              style={styles.attachedThumbnail}
-              testID="attached-image-preview"
-            />
-            <TouchableOpacity
-              style={styles.removeImageBtn}
-              onPress={() => setAttachedImage(null)}
-              testID="remove-attached-image-button"
-            >
-              <X size={14} color="#FFF" />
-            </TouchableOpacity>
-          </View>
+        {attachedImages.length > 0 && (
+          <FlatList
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            data={attachedImages}
+            keyExtractor={(item, index) => `${item}-${index}`}
+            contentContainerStyle={styles.attachedImagesList}
+            testID="attached-images-scroll"
+            renderItem={({ item, index }) => (
+              <View style={styles.attachedImageWrapper} testID={`attached-image-wrapper-${index}`}>
+                <Image
+                  source={{ uri: item }}
+                  style={styles.attachedThumbnail}
+                  testID={`attached-image-preview-${index}`}
+                />
+                <TouchableOpacity
+                  style={styles.removeImageBtn}
+                  onPress={() => removeAttachedImage(index)}
+                  testID={`remove-attached-image-button-${index}`}
+                >
+                  <X size={14} color="#FFF" />
+                </TouchableOpacity>
+              </View>
+            )}
+          />
         )}
 
         <View style={styles.inputRow}>
@@ -417,10 +462,12 @@ export default function LogScreen(): JSX.Element {
           <TouchableOpacity
             style={[
               styles.sendButton,
-              (!inputText.trim() && !attachedImage) || isSending ? styles.sendButtonDisabled : null,
+              (!inputText.trim() && attachedImages.length === 0) || isSending
+                ? styles.sendButtonDisabled
+                : null,
             ]}
             onPress={handleSendMessage}
-            disabled={(!inputText.trim() && !attachedImage) || isSending}
+            disabled={(!inputText.trim() && attachedImages.length === 0) || isSending}
             testID="send-button"
           >
             {isSending ? (
@@ -556,6 +603,18 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     marginBottom: 8,
   },
+  multiImageGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 8,
+    maxWidth: 220,
+  },
+  gridImage: {
+    width: 100,
+    height: 90,
+    borderRadius: 8,
+  },
   timestampUser: {
     color: 'rgba(255, 255, 255, 0.45)',
     fontSize: 10,
@@ -611,24 +670,27 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingTop: 8,
   },
-  attachedImageWrapper: {
+  attachedImagesList: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 8,
-    alignSelf: 'flex-start',
+    gap: 8,
+    paddingBottom: 8,
+  },
+  attachedImageWrapper: {
     position: 'relative',
+    marginRight: 6,
   },
   attachedThumbnail: {
-    width: 60,
-    height: 60,
+    width: 58,
+    height: 58,
     borderRadius: 10,
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: COLORS.primary,
   },
   removeImageBtn: {
     position: 'absolute',
-    top: -6,
-    right: -6,
+    top: -5,
+    right: -5,
     backgroundColor: '#EF4444',
     borderRadius: 10,
     width: 20,
