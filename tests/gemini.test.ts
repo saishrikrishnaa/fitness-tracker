@@ -101,6 +101,7 @@ describe('Coach Response Parser (parseCoachResponse)', () => {
       coach_response: 'Great high-protein lunch and solid bench workout!',
       extracted_data: {
         has_data: true,
+        action: 'update',
         is_new_log: true,
         nutrition: {
           meal_type: 'Lunch',
@@ -130,6 +131,7 @@ describe('Coach Response Parser (parseCoachResponse)', () => {
       coach_response: 'Looking lean!',
       extracted_data: {
         has_data: true,
+        action: 'update',
         is_new_log: true,
         nutrition: null,
         workout: null,
@@ -159,6 +161,7 @@ describe('Coach Response Parser (parseCoachResponse)', () => {
       coach_response: 'To build muscle effectively, aim for 1.6-2.2g of protein per kg of bodyweight.',
       extracted_data: {
         has_data: false,
+        action: 'none',
         is_new_log: false,
         nutrition: null,
         workout: null,
@@ -510,6 +513,7 @@ describe('sendChatMessageToCoach', () => {
       coach_response: 'Awesome chest workout and nutritious lunch!',
       extracted_data: {
         has_data: true,
+        action: 'update',
         is_new_log: true,
         nutrition: {
           meal_type: 'Lunch',

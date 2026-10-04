@@ -1,6 +1,6 @@
 import * as FileSystem from 'expo-file-system';
 import { getApiKey } from './secureStore';
-import { ChatExtractedData, CoachAnalysisResponse } from '../types/fitness';
+import { ChatExtractedData, CoachAnalysisResponse, DailyFitnessSummary } from '../types/fitness';
 
 export interface MealAnalysisResult {
   calories: number;
@@ -53,12 +53,13 @@ export function parseCoachResponse(jsonText: string): CoachAnalysisResponse | nu
 
     const extracted_data: ChatExtractedData = {
       has_data: Boolean(rawExtracted.has_data),
-      is_new_log: rawExtracted.is_new_log !== undefined ? Boolean(rawExtracted.is_new_log) : true,
+      action: rawExtracted.action || (rawExtracted.has_data ? 'update' : 'none'),
+      is_new_log: rawExtracted.is_new_log !== undefined ? Boolean(rawExtracted.is_new_log) : Boolean(rawExtracted.has_data),
     };
 
     if (rawExtracted.nutrition && typeof rawExtracted.nutrition === 'object') {
       extracted_data.nutrition = {
-        meal_type: rawExtracted.nutrition.meal_type || 'Snack',
+        meal_type: rawExtracted.nutrition.meal_type || 'Lunch',
         calories: Number(rawExtracted.nutrition.calories) || 0,
         protein_g: Number(rawExtracted.nutrition.protein_g) || 0,
         carbs_g: Number(rawExtracted.nutrition.carbs_g) || 0,
@@ -98,6 +99,15 @@ export function parseCoachResponse(jsonText: string): CoachAnalysisResponse | nu
     }
 
     extracted_data.is_progress_photo = Boolean(rawExtracted.is_progress_photo);
+
+    if (rawExtracted.daily_totals && typeof rawExtracted.daily_totals === 'object') {
+      extracted_data.daily_totals = {
+        total_calories: Number(rawExtracted.daily_totals.total_calories) || 0,
+        total_protein: Number(rawExtracted.daily_totals.total_protein) || 0,
+        total_carbs: Number(rawExtracted.daily_totals.total_carbs) || 0,
+        total_fat: Number(rawExtracted.daily_totals.total_fat) || 0,
+      };
+    }
 
     return {
       coach_response,
@@ -304,25 +314,37 @@ export async function analyzeMealImageOnDevice(
   });
 }
 
-export const COACH_SYSTEM_PROMPT = `You are "Fuel Coach", an expert sports nutritionist, elite fitness trainer, and encouraging physique coach.
-Your job is to:
-1. Give warm, actionable, concise, motivating fitness advice or answer questions.
-2. Extract any fitness/nutrition data mentioned by the user or visible in the image into structured JSON buckets.
+export function buildCoachSystemPrompt(summary?: DailyFitnessSummary | null): string {
+  let dailyContext = '';
+  if (summary) {
+    dailyContext = `
+CURRENT LIVE LOGGED STATUS FOR TODAY (${summary.date}):
+- Breakfast Slot: ${summary.breakfast ? `${summary.breakfast.calories} kcal (Protein: ${summary.breakfast.protein_g}g, Carbs: ${summary.breakfast.carbs_g}g, Fat: ${summary.breakfast.fat_g}g)` : 'Not logged yet'}
+- Lunch Slot: ${summary.lunch ? `${summary.lunch.calories} kcal (Protein: ${summary.lunch.protein_g}g, Carbs: ${summary.lunch.carbs_g}g, Fat: ${summary.lunch.fat_g}g)` : 'Not logged yet'}
+- Dinner Slot: ${summary.dinner ? `${summary.dinner.calories} kcal (Protein: ${summary.dinner.protein_g}g, Carbs: ${summary.dinner.carbs_g}g, Fat: ${summary.dinner.fat_g}g)` : 'Not logged yet'}
+- Snack Slot: ${summary.snack ? `${summary.snack.calories} kcal (Protein: ${summary.snack.protein_g}g, Carbs: ${summary.snack.carbs_g}g, Fat: ${summary.snack.fat_g}g)` : 'None'}
+- Today's Total Macros: ${summary.totalCalories} kcal (Protein: ${summary.totalProtein}g, Carbs: ${summary.totalCarbs}g, Fat: ${summary.totalFat}g)
+- Recorded Weight: ${summary.weight_kg !== null && summary.weight_kg !== undefined ? `${summary.weight_kg} kg` : 'None'}
+- Recorded Workout: ${summary.workout_notes || 'None'}
+`;
+  }
 
-Rules for extraction:
-- is_new_log: Set to true ONLY when the user is explicitly recording a BRAND NEW meal, workout, or body weight measurement for the first time in this message. If the user is asking a question (e.g. "how many calories in that?", "is this good?", "what can I cook?"), discussing something previously logged, comparing foods, or conversing, you MUST set is_new_log: false so that duplicate database rows are never created.
-- Nutrition: If the user ate or shows food, estimate meal_type ('Breakfast'|'Lunch'|'Dinner'|'Snack'), total calories, protein_g, carbs_g, fat_g, and list of food_items.
-- Workout: If the user describes an exercise, workout, or training session, extract workout_notes and optional duration_mins.
-- Weight: If body weight is mentioned (e.g. "78.5 kg" or "175 lbs" converted to kg), extract weight_kg (as a number in kg).
-- Recovery: If wind-down, sleep, sauna, meditation or soreness is mentioned, extract recovery.wind_down.
-- Progress Photo: If the user provides a physique selfie / progress photo (or asks to save progress), set is_progress_photo: true.
-- If no fitness data is present (e.g. general chit-chat or question), set has_data: false, is_new_log: false, and nutrition/workout/etc to null.
+  return `You are "Fuel Coach", an expert sports nutritionist, elite fitness trainer, and encouraging physique coach.
+You have direct read and write access to the user's daily fitness logs dashboard.
+${dailyContext}
+3-Meal Slots Architecture:
+Each day has exactly 3 primary meal slots: 'Breakfast', 'Lunch', 'Dinner' (and an optional 'Snack').
+When the user reports food, workout, or weight:
+1. If the user tells you about food for a meal slot (e.g. Breakfast), extract the full updated calories and macros for that slot. If they had previous items in that slot today (see CURRENT LIVE LOGGED STATUS) and are adding items or revising it, compute the cumulative total for that meal slot.
+2. In your coach_response, confirm what was logged/updated and explicitly tell the user their new daily total calories and remaining target.
+3. If the user is just asking a question (e.g. "how many calories in eggs?", "what recipe can I make?"), discussing past context, or general chatting without logging, set has_data: false and is_new_log: false.
 
 Return ONLY a valid JSON object matching this schema:
 {
   "coach_response": string,
   "extracted_data": {
     "has_data": boolean,
+    "action": "create" | "update" | "none",
     "is_new_log": boolean,
     "nutrition": {
       "meal_type": "Breakfast" | "Lunch" | "Dinner" | "Snack",
@@ -340,14 +362,24 @@ Return ONLY a valid JSON object matching this schema:
     "recovery": {
       "wind_down": string
     } | null,
-    "is_progress_photo": boolean
+    "is_progress_photo": boolean,
+    "daily_totals": {
+      "total_calories": number,
+      "total_protein": number,
+      "total_carbs": number,
+      "total_fat": number
+    } | null
   }
 }`;
+}
+
+export const COACH_SYSTEM_PROMPT = buildCoachSystemPrompt(null);
 
 export async function sendChatMessageToCoach(
   message: string,
   imageUris?: string[] | string | null,
-  history?: { role: 'user' | 'model'; text: string }[]
+  history?: { role: 'user' | 'model'; text: string }[],
+  dailySummary?: DailyFitnessSummary | null
 ): Promise<CoachAnalysisResponse> {
   const apiKey = await getApiKey();
   if (!apiKey) {
@@ -407,6 +439,7 @@ export async function sendChatMessageToCoach(
 
   const modelsToTry = await getAvailableGeminiModels(apiKey, hasPhotos);
   let lastError: Error | null = null;
+  const promptText = buildCoachSystemPrompt(dailySummary);
 
   for (const model of modelsToTry) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
@@ -419,7 +452,7 @@ export async function sendChatMessageToCoach(
         signal,
         body: JSON.stringify({
           system_instruction: {
-            parts: [{ text: COACH_SYSTEM_PROMPT }],
+            parts: [{ text: promptText }],
           },
           contents,
           generationConfig: {

@@ -11,6 +11,8 @@ import {
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
+  Modal,
+  ScrollView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
@@ -24,10 +26,13 @@ import {
   X,
   Zap,
   Sparkles,
+  Menu,
+  Plus,
+  MessageSquare,
 } from 'lucide-react-native';
 import { LoggedActivityCard } from '../../components/LoggedActivityCard';
 import { COLORS } from '../../constants/theme';
-import { MealType, ChatMessage } from '../../types/fitness';
+import { MealType, ChatMessage, ChatSession } from '../../types/fitness';
 import { sendChatMessageToCoach } from '../../services/gemini';
 import { savePhotoLocally } from '../../services/storage';
 import {
@@ -35,20 +40,47 @@ import {
   saveChatMessage,
   clearChatMessages,
   saveLogFromExtractedData,
+  createChatSession,
+  getChatSessions,
+  deleteChatSession,
+  updateChatSessionTitle,
+  getDailyFitnessSummary,
 } from '../../db/database';
 
 export const MEAL_TYPES: MealType[] = ['Breakfast', 'Lunch', 'Dinner', 'Snack'];
 
 const PROMPT_SUGGESTIONS = [
-  '🥗 Ate oatmeal & 3 eggs',
+  '🥗 Ate oatmeal & 3 eggs for breakfast',
   '🏋️ Did chest & arms workout for 45 mins',
   '⚖️ Weighed 75.5kg today',
-  '🛌 Slept 8 hours & feeling recovered',
+  '🌙 Had chamomile tea & 8 hours sleep',
 ];
+
+function formatSessionDate(dateStr: string): string {
+  try {
+    const d = new Date(dateStr);
+    const now = new Date();
+    const diffMs = now.getTime() - d.getTime();
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+
+    if (diffHours < 1) return 'Just now';
+    if (diffHours < 24) return `${diffHours}h ago`;
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays === 1) return 'Yesterday';
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  } catch {
+    return 'Recent';
+  }
+}
 
 export default function LogScreen(): JSX.Element {
   const insets = useSafeAreaInsets();
   const flatListRef = useRef<FlatList<ChatMessage>>(null);
+
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [currentSessionTitle, setCurrentSessionTitle] = useState<string>('New Conversation');
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
@@ -56,38 +88,125 @@ export default function LogScreen(): JSX.Element {
   const [isSending, setIsSending] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
 
-  const loadMessages = useCallback(async () => {
+  const loadSessionsAndMessages = useCallback(async () => {
     try {
-      const stored = await getChatMessages();
-      setMessages(stored);
+      const activeSessions = await getChatSessions();
+      setSessions(activeSessions);
+
+      let targetSessionId = currentSessionId;
+      if (!targetSessionId) {
+        if (activeSessions.length > 0) {
+          targetSessionId = activeSessions[0].id;
+          setCurrentSessionTitle(activeSessions[0].title);
+        } else {
+          const newSession = await createChatSession('New Conversation');
+          setSessions([newSession]);
+          targetSessionId = newSession.id;
+          setCurrentSessionTitle(newSession.title);
+        }
+        setCurrentSessionId(targetSessionId);
+      }
+
+      if (targetSessionId) {
+        const stored = await getChatMessages(targetSessionId);
+        setMessages(stored);
+      }
     } catch (err) {
-      console.error('Failed to load chat history:', err);
+      console.error('Failed to load chat sessions:', err);
     }
-  }, []);
+  }, [currentSessionId]);
 
   useEffect(() => {
-    loadMessages();
-  }, [loadMessages]);
+    loadSessionsAndMessages();
+  }, [loadSessionsAndMessages]);
 
   useFocusEffect(
     useCallback(() => {
-      loadMessages();
-    }, [loadMessages])
+      loadSessionsAndMessages();
+    }, [loadSessionsAndMessages])
   );
 
-  const handleClearChat = () => {
+  const handleStartNewSession = async () => {
+    try {
+      const newSession = await createChatSession('New Conversation');
+      setSessions((prev) => [newSession, ...prev]);
+      setCurrentSessionId(newSession.id);
+      setCurrentSessionTitle(newSession.title);
+      setMessages([]);
+      setInputText('');
+      setAttachedImages([]);
+      setIsDrawerOpen(false);
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    } catch (err: any) {
+      Alert.alert('Error', err?.message || 'Failed to create new session.');
+    }
+  };
+
+  const handleSelectSession = async (session: ChatSession) => {
+    try {
+      setCurrentSessionId(session.id);
+      setCurrentSessionTitle(session.title);
+      const stored = await getChatMessages(session.id);
+      setMessages(stored);
+      setIsDrawerOpen(false);
+      await Haptics.selectionAsync().catch(() => {});
+    } catch (err: any) {
+      Alert.alert('Error', err?.message || 'Failed to load session.');
+    }
+  };
+
+  const handleDeleteSession = (sessionId: string) => {
     Alert.alert(
-      'Clear Conversation',
-      'Are you sure you want to clear all conversation history with Fuel Coach?',
+      'Delete Session',
+      'Are you sure you want to delete this chat session?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Clear All',
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteChatSession(sessionId);
+              const remaining = sessions.filter((s) => s.id !== sessionId);
+              setSessions(remaining);
+
+              if (currentSessionId === sessionId) {
+                if (remaining.length > 0) {
+                  setCurrentSessionId(remaining[0].id);
+                  setCurrentSessionTitle(remaining[0].title);
+                  const stored = await getChatMessages(remaining[0].id);
+                  setMessages(stored);
+                } else {
+                  handleStartNewSession();
+                }
+              }
+              await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+            } catch (err: any) {
+              Alert.alert('Error', err?.message || 'Failed to delete session.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleClearCurrentChat = () => {
+    Alert.alert(
+      'Clear Conversation',
+      'Are you sure you want to clear the messages in this chat session?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear Messages',
           style: 'destructive',
           onPress: async () => {
             try {
               setIsClearing(true);
-              await clearChatMessages();
+              if (currentSessionId) {
+                await clearChatMessages(currentSessionId);
+              } else {
+                await clearChatMessages();
+              }
               setMessages([]);
               await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
             } catch (err: any) {
@@ -168,17 +287,27 @@ export default function LogScreen(): JSX.Element {
       return;
     }
 
+    let activeSessionId = currentSessionId;
+    if (!activeSessionId) {
+      const newSession = await createChatSession(userText ? userText.slice(0, 28) : 'Photo Check-in');
+      activeSessionId = newSession.id;
+      setCurrentSessionId(newSession.id);
+      setCurrentSessionTitle(newSession.title);
+      setSessions((prev) => [newSession, ...prev]);
+    }
+
     try {
       setIsSending(true);
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
 
-      // Clear input fields immediately for responsive feel
+      // Clear input fields immediately
       setInputText('');
       setAttachedImages([]);
 
       // Optimistically append user message to local state
       const optimisticUserMsg: ChatMessage = {
         id: Date.now(),
+        session_id: activeSessionId,
         sender: 'user',
         text: userText,
         image_uri: imagesToSend[0] || null,
@@ -190,11 +319,19 @@ export default function LogScreen(): JSX.Element {
 
       // Save user message to SQLite
       await saveChatMessage({
+        session_id: activeSessionId,
         sender: 'user',
         text: userText,
         image_uri: imagesToSend[0] || null,
         image_uris: imagesToSend,
       });
+
+      // Update session title if default
+      if (messages.length === 0 && userText) {
+        const snippet = userText.slice(0, 28);
+        updateChatSessionTitle(activeSessionId, snippet).catch(() => {});
+        setCurrentSessionTitle(snippet);
+      }
 
       // Build conversation history from recent messages (last 8)
       const history = messages
@@ -205,13 +342,16 @@ export default function LogScreen(): JSX.Element {
         }))
         .filter((msg) => Boolean(msg.text && msg.text.trim().length > 0));
 
-      // Query Gemini Coach with all images
-      const coachResult = await sendChatMessageToCoach(userText, imagesToSend, history);
+      // Fetch live daily summary for real-time read context
+      const dailySummary = await getDailyFitnessSummary().catch(() => null);
+
+      // Query Gemini Coach with live daily summary context
+      const coachResult = await sendChatMessageToCoach(userText, imagesToSend, history, dailySummary);
 
       let savedMealPhotoUri: string | null = null;
       let savedProgressPhotoUri: string | null = null;
 
-      // Check extracted data and persist media + fitness logs if data is present and it's a new log
+      // Update today's 3-meal slot in database
       if (coachResult.extracted_data?.has_data) {
         if (coachResult.extracted_data.is_progress_photo && imagesToSend.length > 0) {
           savedProgressPhotoUri = await savePhotoLocally(imagesToSend[0], 'progress');
@@ -228,6 +368,7 @@ export default function LogScreen(): JSX.Element {
 
       // Save coach message to SQLite
       await saveChatMessage({
+        session_id: activeSessionId,
         sender: 'coach',
         text: coachResult.coach_response,
         extracted_data: coachResult.extracted_data,
@@ -236,6 +377,7 @@ export default function LogScreen(): JSX.Element {
       // Append coach message to local state
       const coachMsg: ChatMessage = {
         id: Date.now() + 1,
+        session_id: activeSessionId,
         sender: 'coach',
         text: coachResult.coach_response,
         image_uri: null,
@@ -334,8 +476,7 @@ export default function LogScreen(): JSX.Element {
       </View>
       <Text style={styles.emptyTitle}>Meet Fuel Coach 🔥</Text>
       <Text style={styles.emptyDescription}>
-        Your personal AI fitness & nutrition coach. Tell me what you ate, log your workout, record
-        body weight, or snap a meal/physique selfie. I will analyze and log everything automatically!
+        Your AI nutrition & physique assistant. Tell me what you ate, update your meals, or log workouts and weight. Everything automatically syncs to your daily slots (Breakfast, Lunch, Dinner)!
       </Text>
 
       <Text style={styles.suggestionsTitle}>💡 Quick Prompts to Try:</Text>
@@ -363,22 +504,114 @@ export default function LogScreen(): JSX.Element {
     >
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
-        <View style={styles.headerLeft}>
-          <Text style={styles.brandTitle}>Fuel Coach 🔥</Text>
-          <Text style={styles.brandSubtitle}>AI Fitness & Nutrition Assistant</Text>
-        </View>
         <TouchableOpacity
-          style={styles.clearBtn}
-          onPress={handleClearChat}
-          disabled={isClearing || messages.length === 0}
-          testID="clear-chat-button"
+          style={styles.drawerBtn}
+          onPress={() => setIsDrawerOpen(true)}
+          testID="open-sessions-drawer-btn"
         >
-          <Trash2
-            size={20}
-            color={messages.length === 0 ? COLORS.textMuted : COLORS.textSecondary}
-          />
+          <Menu size={22} color={COLORS.text} />
         </TouchableOpacity>
+
+        <View style={styles.headerLeft}>
+          <Text style={styles.brandTitle} numberOfLines={1}>
+            {currentSessionTitle}
+          </Text>
+          <Text style={styles.brandSubtitle}>Fuel Coach · Real-Time Sync</Text>
+        </View>
+
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={styles.headerActionBtn}
+            onPress={handleStartNewSession}
+            testID="new-chat-header-btn"
+          >
+            <Plus size={20} color={COLORS.primary} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.headerActionBtn}
+            onPress={handleClearCurrentChat}
+            disabled={isClearing || messages.length === 0}
+            testID="clear-chat-button"
+          >
+            <Trash2
+              size={18}
+              color={messages.length === 0 ? COLORS.textMuted : COLORS.textSecondary}
+            />
+          </TouchableOpacity>
+        </View>
       </View>
+
+      {/* Sessions Drawer Modal */}
+      <Modal
+        visible={isDrawerOpen}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setIsDrawerOpen(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.drawerContainer, { paddingTop: insets.top + 10 }]}>
+            <View style={styles.drawerHeader}>
+              <View style={styles.drawerTitleRow}>
+                <MessageSquare size={20} color={COLORS.primary} />
+                <Text style={styles.drawerTitle}>Chat Sessions</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.closeDrawerBtn}
+                onPress={() => setIsDrawerOpen(false)}
+                testID="close-drawer-btn"
+              >
+                <X size={20} color={COLORS.text} />
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={styles.newChatDrawerBtn}
+              onPress={handleStartNewSession}
+              testID="new-chat-drawer-btn"
+            >
+              <Plus size={18} color="#000" />
+              <Text style={styles.newChatDrawerText}>New Chat Session</Text>
+            </TouchableOpacity>
+
+            <Text style={styles.sessionsSubheading}>Past 7 Days History</Text>
+
+            <ScrollView style={styles.sessionsList} showsVerticalScrollIndicator={false}>
+              {sessions.length === 0 ? (
+                <Text style={styles.emptySessionsText}>No active sessions</Text>
+              ) : (
+                sessions.map((session) => {
+                  const isActive = session.id === currentSessionId;
+                  return (
+                    <TouchableOpacity
+                      key={session.id}
+                      style={[styles.sessionItem, isActive && styles.sessionItemActive]}
+                      onPress={() => handleSelectSession(session)}
+                      testID={`session-item-${session.id}`}
+                    >
+                      <View style={styles.sessionItemContent}>
+                        <Text style={[styles.sessionItemTitle, isActive && styles.sessionItemTitleActive]} numberOfLines={1}>
+                          {session.title}
+                        </Text>
+                        <Text style={styles.sessionItemDate}>
+                          {formatSessionDate(session.updated_at || session.created_at)}
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.deleteSessionBtn}
+                        onPress={() => handleDeleteSession(session.id)}
+                        testID={`delete-session-${session.id}`}
+                      >
+                        <Trash2 size={16} color={COLORS.textMuted} />
+                      </TouchableOpacity>
+                    </TouchableOpacity>
+                  );
+                })
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
 
       {/* Chat Messages */}
       <FlatList
@@ -491,30 +724,146 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     paddingBottom: 12,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255, 255, 255, 0.06)',
     backgroundColor: COLORS.background,
+    gap: 12,
+  },
+  drawerBtn: {
+    padding: 6,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
   },
   headerLeft: {
     flex: 1,
   },
-  brandTitle: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: COLORS.text,
-    letterSpacing: -0.5,
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
-  brandSubtitle: {
-    fontSize: 13,
-    color: COLORS.textSecondary,
-    marginTop: 2,
-  },
-  clearBtn: {
+  headerActionBtn: {
     padding: 8,
     borderRadius: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  brandTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: COLORS.text,
+    letterSpacing: -0.3,
+  },
+  brandSubtitle: {
+    fontSize: 12,
+    color: COLORS.primary,
+    marginTop: 1,
+    fontWeight: '600',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+  },
+  drawerContainer: {
+    width: '85%',
+    maxWidth: 340,
+    height: '100%',
+    backgroundColor: '#0F172A',
+    borderRightWidth: 1,
+    borderRightColor: COLORS.cardBorder,
+    paddingHorizontal: 18,
+  },
+  drawerHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  drawerTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  drawerTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: COLORS.text,
+  },
+  closeDrawerBtn: {
+    padding: 6,
+  },
+  newChatDrawerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.primary,
+    paddingVertical: 12,
+    borderRadius: 12,
+    gap: 8,
+    marginBottom: 20,
+  },
+  newChatDrawerText: {
+    color: '#000',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  sessionsSubheading: {
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 10,
+  },
+  sessionsList: {
+    flex: 1,
+  },
+  emptySessionsText: {
+    color: COLORS.textMuted,
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: 20,
+  },
+  sessionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  sessionItemActive: {
+    backgroundColor: 'rgba(6, 182, 212, 0.12)',
+    borderColor: COLORS.primary,
+  },
+  sessionItemContent: {
+    flex: 1,
+    marginRight: 10,
+  },
+  sessionItemTitle: {
+    color: COLORS.text,
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 3,
+  },
+  sessionItemTitleActive: {
+    color: COLORS.primary,
+    fontWeight: '700',
+  },
+  sessionItemDate: {
+    color: COLORS.textMuted,
+    fontSize: 11,
+  },
+  deleteSessionBtn: {
+    padding: 6,
   },
   messageList: {
     paddingHorizontal: 16,
@@ -737,3 +1086,4 @@ const styles = StyleSheet.create({
     opacity: 0.4,
   },
 });
+

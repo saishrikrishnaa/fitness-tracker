@@ -258,6 +258,7 @@ describe('Database Operations', () => {
     expect(mockDb.runAsync).toHaveBeenCalledWith(
       expect.stringContaining('INSERT INTO chat_messages'),
       [
+        null,
         'coach',
         'Great job!',
         'file:///meal.jpg',
@@ -276,7 +277,7 @@ describe('Database Operations', () => {
     expect(id).toBe(42);
     expect(mockDb.runAsync).toHaveBeenCalledWith(
       expect.stringContaining('INSERT INTO chat_messages'),
-      ['user', 'Hello coach', null, null]
+      [null, 'user', 'Hello coach', null, null]
     );
   });
 

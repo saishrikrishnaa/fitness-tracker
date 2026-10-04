@@ -5,6 +5,9 @@ import {
   ChatMessage,
   NewChatMessage,
   ChatExtractedData,
+  ChatSession,
+  DailyFitnessSummary,
+  MealType,
 } from '../types/fitness';
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
@@ -44,16 +47,31 @@ export async function initDatabase(db: SQLite.SQLiteDatabase): Promise<void> {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS chat_sessions (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON chat_sessions(updated_at);
     CREATE TABLE IF NOT EXISTS chat_messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT,
       sender TEXT NOT NULL,
       text TEXT NOT NULL,
       image_uri TEXT,
       extracted_data TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE INDEX IF NOT EXISTS idx_chat_session ON chat_messages(session_id);
     CREATE INDEX IF NOT EXISTS idx_chat_created_at ON chat_messages(created_at);
   `);
+
+  try {
+    await db.execAsync('ALTER TABLE chat_messages ADD COLUMN session_id TEXT;');
+  } catch {
+    // Column already exists
+  }
 }
 
 export function formatLogForStorage(entry: NewFitnessLog) {
@@ -149,11 +167,7 @@ export async function deduplicateFitnessLogs(): Promise<number> {
   for (const row of rows as any[]) {
     const date = row.date || '';
     const mealType = (row.meal_type || '').trim().toLowerCase();
-    const calories = Math.round(Number(row.calories) || 0);
-    const workout = (row.workout_notes || '').trim().toLowerCase();
-    const weight = row.weight_kg != null ? Number(row.weight_kg).toFixed(1) : '';
-
-    const key = `${date}|${mealType}|${calories}|${workout}|${weight}`;
+    const key = `${date}|${mealType}`;
     if (seenKeys.has(key)) {
       idsToDelete.push(Number(row.id));
     } else {
@@ -182,6 +196,260 @@ export async function getProgressPhotos(): Promise<FitnessLogEntry[]> {
     "SELECT * FROM fitness_logs WHERE progress_photo_uri IS NOT NULL AND progress_photo_uri != '' ORDER BY id DESC"
   );
   return rows.map(parseDbRowToLog);
+}
+
+export async function getDailyFitnessSummary(targetDate?: string): Promise<DailyFitnessSummary> {
+  const db = await getDb();
+  const date = targetDate || new Date().toISOString().split('T')[0];
+  const rows = await db.getAllAsync('SELECT * FROM fitness_logs WHERE date = ? ORDER BY id ASC', [date]);
+  const entries: FitnessLogEntry[] = rows.map(parseDbRowToLog);
+
+  let breakfast: FitnessLogEntry | null = null;
+  let lunch: FitnessLogEntry | null = null;
+  let dinner: FitnessLogEntry | null = null;
+  let snack: FitnessLogEntry | null = null;
+  let weight_kg: number | null = null;
+  let workout_notes: string | null = null;
+  let wind_down: string | null = null;
+
+  let totalCalories = 0;
+  let totalProtein = 0;
+  let totalCarbs = 0;
+  let totalFat = 0;
+
+  for (const entry of entries) {
+    totalCalories += entry.calories || 0;
+    totalProtein += entry.protein_g || 0;
+    totalCarbs += entry.carbs_g || 0;
+    totalFat += entry.fat_g || 0;
+
+    if (entry.weight_kg !== null && entry.weight_kg !== undefined) {
+      weight_kg = entry.weight_kg;
+    }
+    if (entry.workout_notes) {
+      workout_notes = workout_notes ? `${workout_notes}, ${entry.workout_notes}` : entry.workout_notes;
+    }
+    if (entry.wind_down) {
+      wind_down = entry.wind_down;
+    }
+
+    const type = entry.meal_type;
+    if (type === 'Breakfast') breakfast = entry;
+    else if (type === 'Lunch') lunch = entry;
+    else if (type === 'Dinner') dinner = entry;
+    else if (type === 'Snack') snack = entry;
+  }
+
+  return {
+    date,
+    breakfast,
+    lunch,
+    dinner,
+    snack,
+    totalCalories,
+    totalProtein,
+    totalCarbs,
+    totalFat,
+    weight_kg,
+    workout_notes,
+    wind_down,
+  };
+}
+
+export async function upsertDailyMealLog(
+  date: string,
+  mealType: MealType,
+  data: Partial<NewFitnessLog>
+): Promise<number> {
+  const db = await getDb();
+  const existingRows = await db.getAllAsync(
+    'SELECT * FROM fitness_logs WHERE date = ? AND meal_type = ? ORDER BY id DESC',
+    [date, mealType]
+  );
+
+  const timestamp = data.timestamp || new Date().toISOString();
+  const calories = Number(data.calories) || 0;
+  const protein_g = Number(data.protein_g) || 0;
+  const carbs_g = Number(data.carbs_g) || 0;
+  const fat_g = Number(data.fat_g) || 0;
+  const weight_kg = data.weight_kg !== undefined ? data.weight_kg : null;
+  const workout_notes = data.workout_notes || null;
+  const wind_down = data.wind_down || null;
+  const ai_feedback = JSON.stringify(data.ai_feedback || []);
+  const meal_photo_uri = data.meal_photo_uri || null;
+  const progress_photo_uri = data.progress_photo_uri || null;
+
+  if (existingRows && existingRows.length > 0) {
+    const existing = existingRows[0] as any;
+    await db.runAsync(
+      `UPDATE fitness_logs SET
+        calories = ?,
+        protein_g = ?,
+        carbs_g = ?,
+        fat_g = ?,
+        weight_kg = COALESCE(?, weight_kg),
+        workout_notes = COALESCE(?, workout_notes),
+        wind_down = COALESCE(?, wind_down),
+        meal_photo_uri = COALESCE(?, meal_photo_uri),
+        progress_photo_uri = COALESCE(?, progress_photo_uri)
+      WHERE id = ?`,
+      [
+        calories,
+        protein_g,
+        carbs_g,
+        fat_g,
+        weight_kg,
+        workout_notes,
+        wind_down,
+        meal_photo_uri,
+        progress_photo_uri,
+        existing.id,
+      ]
+    );
+    return existing.id;
+  }
+
+  const result = await db.runAsync(
+    `INSERT INTO fitness_logs (
+      timestamp, date, meal_type, calories, protein_g, carbs_g, fat_g,
+      weight_kg, workout_notes, wind_down, ai_feedback, meal_photo_uri, progress_photo_uri
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      timestamp,
+      date,
+      mealType,
+      calories,
+      protein_g,
+      carbs_g,
+      fat_g,
+      weight_kg,
+      workout_notes,
+      wind_down,
+      ai_feedback,
+      meal_photo_uri,
+      progress_photo_uri,
+    ]
+  );
+  return result.lastInsertRowId;
+}
+
+export async function saveLogFromExtractedData(
+  extracted: ChatExtractedData,
+  mealPhotoUri?: string | null,
+  progressPhotoUri?: string | null
+): Promise<number | null> {
+  if (!extracted.has_data || extracted.is_new_log === false) {
+    return null;
+  }
+  const now = new Date();
+  const timestamp = now.toISOString();
+  const date = timestamp.split('T')[0];
+
+  const mealType = extracted.nutrition?.meal_type || 'Lunch';
+  const calories = extracted.nutrition?.calories || 0;
+  const protein_g = extracted.nutrition?.protein_g || 0;
+  const carbs_g = extracted.nutrition?.carbs_g || 0;
+  const fat_g = extracted.nutrition?.fat_g || 0;
+  const weight_kg = extracted.weight_kg ?? null;
+  const workout_notes = extracted.workout?.workout_notes ?? null;
+  const wind_down = extracted.recovery?.wind_down ?? null;
+
+  return await upsertDailyMealLog(date, mealType, {
+    timestamp,
+    date,
+    meal_type: mealType,
+    calories,
+    protein_g,
+    carbs_g,
+    fat_g,
+    weight_kg,
+    workout_notes,
+    wind_down,
+    ai_feedback: [],
+    meal_photo_uri: mealPhotoUri ?? null,
+    progress_photo_uri: progressPhotoUri ?? null,
+  });
+}
+
+// ----------------------------------------------------
+// Chat Sessions Management (Max 7 Days Retention)
+// ----------------------------------------------------
+
+export async function createChatSession(title: string = 'New Conversation'): Promise<ChatSession> {
+  const db = await getDb();
+  const id = `session_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const now = new Date().toISOString();
+
+  await db.runAsync(
+    'INSERT INTO chat_sessions (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)',
+    [id, title, now, now]
+  );
+
+  return {
+    id,
+    title,
+    created_at: now,
+    updated_at: now,
+  };
+}
+
+export async function cleanupOldSessions(maxDays: number = 7): Promise<number> {
+  const db = await getDb();
+  const cutoffDate = new Date(Date.now() - maxDays * 24 * 60 * 60 * 1000).toISOString();
+  
+  const oldSessions = await db.getAllAsync(
+    'SELECT id FROM chat_sessions WHERE created_at < ?',
+    [cutoffDate]
+  );
+
+  if (oldSessions && oldSessions.length > 0) {
+    for (const session of oldSessions as any[]) {
+      await db.runAsync('DELETE FROM chat_messages WHERE session_id = ?', [session.id]);
+      await db.runAsync('DELETE FROM chat_sessions WHERE id = ?', [session.id]);
+    }
+    return oldSessions.length;
+  }
+  return 0;
+}
+
+export async function getChatSessions(): Promise<ChatSession[]> {
+  const db = await getDb();
+  await cleanupOldSessions(7).catch(() => 0);
+  const rows = await db.getAllAsync('SELECT * FROM chat_sessions ORDER BY updated_at DESC');
+  return rows.map((r: any) => ({
+    id: String(r.id),
+    title: String(r.title || 'Chat Session'),
+    created_at: String(r.created_at),
+    updated_at: String(r.updated_at || r.created_at),
+  }));
+}
+
+export async function getChatSessionById(sessionId: string): Promise<ChatSession | null> {
+  const db = await getDb();
+  const rows = await db.getAllAsync('SELECT * FROM chat_sessions WHERE id = ?', [sessionId]);
+  if (!rows || rows.length === 0) return null;
+  const r = rows[0] as any;
+  return {
+    id: String(r.id),
+    title: String(r.title || 'Chat Session'),
+    created_at: String(r.created_at),
+    updated_at: String(r.updated_at || r.created_at),
+  };
+}
+
+export async function updateChatSessionTitle(sessionId: string, title: string): Promise<void> {
+  const db = await getDb();
+  const now = new Date().toISOString();
+  await db.runAsync(
+    'UPDATE chat_sessions SET title = ?, updated_at = ? WHERE id = ?',
+    [title, now, sessionId]
+  );
+}
+
+export async function deleteChatSession(sessionId: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('DELETE FROM chat_messages WHERE session_id = ?', [sessionId]);
+  await db.runAsync('DELETE FROM chat_sessions WHERE id = ?', [sessionId]);
 }
 
 export function parseDbRowToChatMessage(row: any): ChatMessage {
@@ -219,6 +487,7 @@ export function parseDbRowToChatMessage(row: any): ChatMessage {
 
   return {
     id: row.id,
+    session_id: row.session_id ? String(row.session_id) : undefined,
     sender: row.sender,
     text: row.text,
     image_uri: singleImageUri,
@@ -236,122 +505,47 @@ export async function saveChatMessage(message: NewChatMessage): Promise<number> 
     : message.image_uri ?? null;
 
   const result = await db.runAsync(
-    `INSERT INTO chat_messages (sender, text, image_uri, extracted_data) VALUES (?, ?, ?, ?)`,
+    `INSERT INTO chat_messages (session_id, sender, text, image_uri, extracted_data) VALUES (?, ?, ?, ?, ?)`,
     [
+      message.session_id ?? null,
       message.sender,
       message.text,
       imageField,
       extractedJson,
     ]
   );
+
+  if (message.session_id) {
+    const now = new Date().toISOString();
+    await db.runAsync(
+      'UPDATE chat_sessions SET updated_at = ? WHERE id = ?',
+      [now, message.session_id]
+    ).catch(() => {});
+  }
+
   return result.lastInsertRowId;
 }
 
-export async function getChatMessages(): Promise<ChatMessage[]> {
+export async function getChatMessages(sessionId?: string): Promise<ChatMessage[]> {
   const db = await getDb();
-  const rows = await db.getAllAsync('SELECT * FROM chat_messages ORDER BY id ASC');
+  let rows: any[] = [];
+  if (sessionId) {
+    rows = await db.getAllAsync(
+      'SELECT * FROM chat_messages WHERE session_id = ? ORDER BY id ASC',
+      [sessionId]
+    );
+  } else {
+    rows = await db.getAllAsync('SELECT * FROM chat_messages ORDER BY id ASC');
+  }
   return rows.map(parseDbRowToChatMessage);
 }
 
-export async function clearChatMessages(): Promise<void> {
+export async function clearChatMessages(sessionId?: string): Promise<void> {
   const db = await getDb();
-  await db.execAsync('DELETE FROM chat_messages');
-}
-
-export async function saveLogFromExtractedData(
-  extracted: ChatExtractedData,
-  mealPhotoUri?: string | null,
-  progressPhotoUri?: string | null
-): Promise<number | null> {
-  if (!extracted.has_data || extracted.is_new_log === false) {
-    return null;
+  if (sessionId) {
+    await db.runAsync('DELETE FROM chat_messages WHERE session_id = ?', [sessionId]);
+  } else {
+    await db.execAsync('DELETE FROM chat_messages');
   }
-  const now = new Date();
-  const timestamp = now.toISOString();
-  const date = timestamp.split('T')[0];
-
-  const mealType = extracted.nutrition?.meal_type || 'Lunch';
-  const calories = extracted.nutrition?.calories || 0;
-  const protein = extracted.nutrition?.protein_g || 0;
-  const carbs = extracted.nutrition?.carbs_g || 0;
-  const fat = extracted.nutrition?.fat_g || 0;
-  const weight = extracted.weight_kg ?? null;
-  const workoutNotes = extracted.workout?.workout_notes ?? null;
-  const windDown = extracted.recovery?.wind_down ?? null;
-
-  const db = await getDb();
-
-  // Deduplicate against logs from today
-  const existingToday = await db.getAllAsync(
-    'SELECT * FROM fitness_logs WHERE date = ? ORDER BY id DESC',
-    [date]
-  );
-
-  for (const existing of existingToday as any[]) {
-    const isSameMeal =
-      calories > 0 &&
-      existing.meal_type === mealType &&
-      (Math.abs(existing.calories - calories) < 30 || Math.abs(existing.protein_g - protein) < 5);
-
-    const isSameWorkout =
-      workoutNotes &&
-      existing.workout_notes &&
-      existing.workout_notes.toLowerCase().trim() === workoutNotes.toLowerCase().trim();
-
-    const isSameWeight =
-      weight !== null &&
-      existing.weight_kg !== null &&
-      Math.abs(existing.weight_kg - weight) < 0.2 &&
-      calories === 0 &&
-      !workoutNotes;
-
-    if (isSameMeal || isSameWorkout || isSameWeight) {
-      // Update existing entry instead of adding duplicate row
-      await db.runAsync(
-        `UPDATE fitness_logs SET
-          calories = CASE WHEN ? > 0 THEN ? ELSE calories END,
-          protein_g = CASE WHEN ? > 0 THEN ? ELSE protein_g END,
-          carbs_g = CASE WHEN ? > 0 THEN ? ELSE carbs_g END,
-          fat_g = CASE WHEN ? > 0 THEN ? ELSE fat_g END,
-          weight_kg = COALESCE(?, weight_kg),
-          workout_notes = COALESCE(?, workout_notes),
-          wind_down = COALESCE(?, wind_down),
-          meal_photo_uri = COALESCE(?, meal_photo_uri),
-          progress_photo_uri = COALESCE(?, progress_photo_uri)
-        WHERE id = ?`,
-        [
-          calories, calories,
-          protein, protein,
-          carbs, carbs,
-          fat, fat,
-          weight,
-          workoutNotes,
-          windDown,
-          mealPhotoUri ?? null,
-          progressPhotoUri ?? null,
-          existing.id,
-        ]
-      );
-      return existing.id;
-    }
-  }
-
-  const logEntry: NewFitnessLog = {
-    timestamp,
-    date,
-    meal_type: mealType,
-    calories,
-    protein_g: protein,
-    carbs_g: carbs,
-    fat_g: fat,
-    weight_kg: weight,
-    workout_notes: workoutNotes,
-    wind_down: windDown,
-    ai_feedback: [],
-    meal_photo_uri: mealPhotoUri ?? null,
-    progress_photo_uri: progressPhotoUri ?? null,
-  };
-
-  return await saveLogEntry(logEntry);
 }
 

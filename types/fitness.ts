@@ -34,8 +34,31 @@ export interface NewFitnessLog {
   progress_photo_uri?: string | null;
 }
 
+export interface DailyFitnessSummary {
+  date: string;
+  breakfast: FitnessLogEntry | null;
+  lunch: FitnessLogEntry | null;
+  dinner: FitnessLogEntry | null;
+  snack: FitnessLogEntry | null;
+  totalCalories: number;
+  totalProtein: number;
+  totalCarbs: number;
+  totalFat: number;
+  weight_kg: number | null;
+  workout_notes: string | null;
+  wind_down: string | null;
+}
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ChatExtractedData {
   has_data: boolean;
+  action?: 'create' | 'update' | 'none';
   is_new_log?: boolean;
   nutrition?: {
     meal_type: MealType;
@@ -54,10 +77,17 @@ export interface ChatExtractedData {
     wind_down: string;
   } | null;
   is_progress_photo?: boolean;
+  daily_totals?: {
+    total_calories: number;
+    total_protein: number;
+    total_carbs: number;
+    total_fat: number;
+  } | null;
 }
 
 export interface ChatMessage {
   id: number;
+  session_id?: string;
   sender: 'user' | 'coach';
   text: string;
   image_uri: string | null;
@@ -67,6 +97,7 @@ export interface ChatMessage {
 }
 
 export interface NewChatMessage {
+  session_id?: string;
   sender: 'user' | 'coach';
   text: string;
   image_uri?: string | null;
