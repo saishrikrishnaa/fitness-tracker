@@ -15,15 +15,21 @@ let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 export function getDb(): Promise<SQLite.SQLiteDatabase> {
   if (!dbPromise) {
     dbPromise = (async () => {
-      const db = await SQLite.openDatabaseAsync('fuel_fitness.db');
-      await initDatabase(db);
-      return db;
+      try {
+        const db = await SQLite.openDatabaseAsync('fuel_fitness.db');
+        await initDatabase(db);
+        return db;
+      } catch (err) {
+        dbPromise = null;
+        throw err;
+      }
     })();
   }
   return dbPromise;
 }
 
 export async function initDatabase(db: SQLite.SQLiteDatabase): Promise<void> {
+  // 1. Create base tables
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS fitness_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,10 +49,12 @@ export async function initDatabase(db: SQLite.SQLiteDatabase): Promise<void> {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_logs_date ON fitness_logs(date);
+
     CREATE TABLE IF NOT EXISTS user_settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
     CREATE TABLE IF NOT EXISTS chat_sessions (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
@@ -54,6 +62,7 @@ export async function initDatabase(db: SQLite.SQLiteDatabase): Promise<void> {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON chat_sessions(updated_at);
+
     CREATE TABLE IF NOT EXISTS chat_messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       session_id TEXT,
@@ -63,15 +72,28 @@ export async function initDatabase(db: SQLite.SQLiteDatabase): Promise<void> {
       extracted_data TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+  `);
+
+  // 2. Safely perform schema migrations for existing installs
+  try {
+    const tableInfo = await db.getAllAsync<{ name: string }>('PRAGMA table_info(chat_messages);');
+    const columnNames = (tableInfo || []).map((col) => col.name);
+    if (!columnNames.includes('session_id')) {
+      await db.execAsync('ALTER TABLE chat_messages ADD COLUMN session_id TEXT;');
+    }
+  } catch {
+    try {
+      await db.execAsync('ALTER TABLE chat_messages ADD COLUMN session_id TEXT;');
+    } catch {
+      // Ignored if already exists
+    }
+  }
+
+  // 3. Create indexes that depend on migrated columns
+  await db.execAsync(`
     CREATE INDEX IF NOT EXISTS idx_chat_session ON chat_messages(session_id);
     CREATE INDEX IF NOT EXISTS idx_chat_created_at ON chat_messages(created_at);
   `);
-
-  try {
-    await db.execAsync('ALTER TABLE chat_messages ADD COLUMN session_id TEXT;');
-  } catch {
-    // Column already exists
-  }
 }
 
 export function formatLogForStorage(entry: NewFitnessLog) {

@@ -151,6 +151,21 @@ describe('Database Operations', () => {
     expect(query).toContain('CREATE TABLE IF NOT EXISTS fitness_logs');
     expect(query).toContain('CREATE TABLE IF NOT EXISTS user_settings');
     expect(query).toContain('CREATE INDEX IF NOT EXISTS idx_logs_date');
+    expect(query).toContain('CREATE TABLE IF NOT EXISTS chat_sessions');
+    expect(query).toContain('CREATE TABLE IF NOT EXISTS chat_messages');
+  });
+
+  it('runs schema migration to add session_id column if not present', async () => {
+    mockDb.getAllAsync.mockResolvedValueOnce([{ name: 'id' }, { name: 'sender' }, { name: 'text' }]);
+    await initDatabase(mockDb as any);
+    expect(mockDb.execAsync).toHaveBeenCalledWith('ALTER TABLE chat_messages ADD COLUMN session_id TEXT;');
+  });
+
+  it('skips schema migration if session_id column is already present', async () => {
+    mockDb.getAllAsync.mockResolvedValueOnce([{ name: 'id' }, { name: 'session_id' }, { name: 'sender' }]);
+    await initDatabase(mockDb as any);
+    const calls = mockDb.execAsync.mock.calls.map((c: any) => c[0]);
+    expect(calls).not.toContain('ALTER TABLE chat_messages ADD COLUMN session_id TEXT;');
   });
 
   it('handles concurrent getDb calls returning the same singleton promise', async () => {
