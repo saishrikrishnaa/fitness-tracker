@@ -42,6 +42,20 @@ jest.mock('expo-router', () => ({
   },
 }));
 
+jest.mock('expo-file-system', () => ({
+  documentDirectory: 'file:///data/user/0/host.exp.exponent/files/',
+  getInfoAsync: jest.fn(),
+  makeDirectoryAsync: jest.fn(),
+  copyAsync: jest.fn(),
+  readAsStringAsync: jest.fn(),
+}));
+
+jest.mock('../services/chatQueue', () => ({
+  processPendingMessages: jest.fn().mockResolvedValue(0),
+  subscribeToQueue: jest.fn(() => () => {}),
+  isQueueProcessing: jest.fn(() => false),
+}));
+
 jest.mock('expo-sqlite', () => ({
   openDatabaseAsync: jest.fn().mockImplementation(() =>
     Promise.resolve({
@@ -113,5 +127,19 @@ describe('Analytics Calculations', () => {
     expect(AnalyticsScreen).toBeDefined();
     const element = React.createElement(AnalyticsScreen);
     expect(element).toBeDefined();
+  });
+
+  it('excludes Workout entries from meal counting', () => {
+    const logs: Partial<FitnessLogEntry>[] = [
+      { id: 1, meal_type: 'Breakfast', calories: 450 },
+      { id: 2, meal_type: 'Workout', calories: 0, workout_notes: 'Morning run 5k' },
+      { id: 3, meal_type: 'Dinner', calories: 650 },
+    ];
+
+    const mealLogs = (logs as FitnessLogEntry[]).filter(
+      (l) => Boolean(l.calories && l.calories > 0) && l.meal_type !== 'Workout'
+    );
+    expect(mealLogs).toHaveLength(2);
+    expect(mealLogs.map((l) => l.meal_type)).toEqual(['Breakfast', 'Dinner']);
   });
 });

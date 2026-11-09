@@ -16,6 +16,7 @@ import { GlassCard } from '../../components/GlassCard';
 import { COLORS } from '../../constants/theme';
 import { FitnessLogEntry } from '../../types/fitness';
 import { getLogEntries, deleteLogEntry, deduplicateFitnessLogs } from '../../db/database';
+import { processPendingMessages, subscribeToQueue } from '../../services/chatQueue';
 
 function parseDateParts(dateStr: string): Date {
   const [year, month, day] = dateStr.split('-').map(Number);
@@ -99,12 +100,19 @@ export default function AnalyticsScreen(): JSX.Element {
 
   useFocusEffect(
     useCallback(() => {
-      loadData();
+      processPendingMessages().finally(() => {
+        loadData();
+      });
+      const unsubscribe = subscribeToQueue(() => {
+        loadData();
+      });
+      return () => unsubscribe();
     }, [loadData])
   );
 
   const onRefresh = async () => {
     setRefreshing(true);
+    await processPendingMessages().catch(() => 0);
     await loadData();
     setRefreshing(false);
   };
@@ -150,7 +158,10 @@ export default function AnalyticsScreen(): JSX.Element {
     }
   };
 
-  const mealLogs = useMemo(() => logs.filter((l) => (l.calories && l.calories > 0) || l.meal_type), [logs]);
+  const mealLogs = useMemo(
+    () => logs.filter((l) => (l.calories && l.calories > 0) && l.meal_type !== 'Workout'),
+    [logs]
+  );
   const avgCalories = useMemo(() => calculateDailyAverages(logs), [logs]);
   const streak = useMemo(() => calculateStreak(logs), [logs]);
   const latestWeight = useMemo(
@@ -220,36 +231,66 @@ export default function AnalyticsScreen(): JSX.Element {
           <Text style={styles.emptyText}>No logs yet. Head to Log tab to record your first meal!</Text>
         </GlassCard>
       ) : (
-        logs.slice(0, 20).map((log) => (
-          <GlassCard key={log.id} style={styles.logCard}>
-            <View style={styles.logHeader}>
-              <View style={styles.logHeaderLeft}>
-                <Text style={styles.logMealType}>{log.meal_type}</Text>
-                <Text style={styles.logDate}>{log.date}</Text>
+        logs.slice(0, 20).map((log) => {
+          const isWorkout =
+            log.meal_type === 'Workout' ||
+            ((!log.calories || log.calories === 0) && Boolean(log.workout_notes));
+
+          let displayMealType = log.meal_type;
+          if (isWorkout) {
+            displayMealType = log.workout_notes?.toLowerCase().includes('morning')
+              ? 'Morning Activity'
+              : 'Workout';
+          }
+
+          return (
+            <GlassCard key={log.id} style={styles.logCard}>
+              <View style={styles.logHeader}>
+                <View style={styles.logHeaderLeft}>
+                  <Text style={[styles.logMealType, isWorkout && styles.workoutMealType]}>
+                    {isWorkout ? `🏋️ ${displayMealType}` : displayMealType}
+                  </Text>
+                  <Text style={styles.logDate}>{log.date}</Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.deleteBtn}
+                  onPress={() => handleDeleteLog(log.id)}
+                  testID={`delete-log-${log.id}`}
+                >
+                  <Trash2 size={16} color={COLORS.textMuted} />
+                </TouchableOpacity>
               </View>
-              <TouchableOpacity
-                style={styles.deleteBtn}
-                onPress={() => handleDeleteLog(log.id)}
-                testID={`delete-log-${log.id}`}
-              >
-                <Trash2 size={16} color={COLORS.textMuted} />
-              </TouchableOpacity>
-            </View>
-            <Text style={styles.logCalories}>{log.calories} kcal</Text>
-            <Text style={styles.logMacros}>
-              P: {log.protein_g}g · C: {log.carbs_g}g · F: {log.fat_g}g
-            </Text>
-            {log.weight_kg !== null && log.weight_kg !== undefined && (
-              <Text style={styles.logNotes}>⚖️ {log.weight_kg} kg</Text>
-            )}
-            {log.workout_notes ? (
-              <Text style={styles.logNotes}>🏋️ {log.workout_notes}</Text>
-            ) : null}
-            {log.wind_down ? (
-              <Text style={styles.logNotes}>🌙 {log.wind_down}</Text>
-            ) : null}
-          </GlassCard>
-        ))
+
+              {isWorkout ? (
+                <View style={styles.workoutContainer}>
+                  <Text style={styles.workoutNotesHighlight}>
+                    {log.workout_notes || 'Activity completed'}
+                  </Text>
+                  {log.calories > 0 && (
+                    <Text style={styles.logMacros}>{log.calories} kcal</Text>
+                  )}
+                </View>
+              ) : (
+                <>
+                  <Text style={styles.logCalories}>{log.calories} kcal</Text>
+                  <Text style={styles.logMacros}>
+                    P: {log.protein_g}g · C: {log.carbs_g}g · F: {log.fat_g}g
+                  </Text>
+                  {log.workout_notes ? (
+                    <Text style={styles.logNotes}>🏋️ {log.workout_notes}</Text>
+                  ) : null}
+                </>
+              )}
+
+              {log.weight_kg !== null && log.weight_kg !== undefined && (
+                <Text style={styles.logNotes}>⚖️ {log.weight_kg} kg</Text>
+              )}
+              {log.wind_down ? (
+                <Text style={styles.logNotes}>🌙 {log.wind_down}</Text>
+              ) : null}
+            </GlassCard>
+          );
+        })
       )}
     </ScrollView>
   );
@@ -296,6 +337,9 @@ const styles = StyleSheet.create({
   logHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
   logHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   logMealType: { color: COLORS.primary, fontSize: 14, fontWeight: '700' },
+  workoutMealType: { color: '#38BDF8' },
+  workoutContainer: { marginVertical: 4 },
+  workoutNotesHighlight: { color: COLORS.text, fontSize: 18, fontWeight: '700', lineHeight: 24 },
   logDate: { color: COLORS.textMuted, fontSize: 12 },
   deleteBtn: {
     padding: 6,

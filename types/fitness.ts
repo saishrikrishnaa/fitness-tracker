@@ -1,4 +1,4 @@
-export type MealType = 'Breakfast' | 'Lunch' | 'Dinner' | 'Snack';
+export type MealType = 'Breakfast' | 'Lunch' | 'Dinner' | 'Snack' | 'Workout';
 
 export interface FitnessLogEntry {
   id: number;

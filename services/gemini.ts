@@ -1,6 +1,6 @@
 import * as FileSystem from 'expo-file-system';
 import { getApiKey } from './secureStore';
-import { ChatExtractedData, CoachAnalysisResponse, DailyFitnessSummary } from '../types/fitness';
+import { ChatExtractedData, CoachAnalysisResponse, DailyFitnessSummary, MealType } from '../types/fitness';
 
 export interface MealAnalysisResult {
   calories: number;
@@ -34,6 +34,14 @@ export function parseGeminiResponse(jsonText: string): MealAnalysisResult | null
   }
 }
 
+export function inferDefaultMealType(time?: Date): MealType {
+  const hour = (time || new Date()).getHours();
+  if (hour < 12) return 'Breakfast';
+  if (hour < 17) return 'Lunch';
+  if (hour < 22) return 'Dinner';
+  return 'Snack';
+}
+
 export function parseCoachResponse(jsonText: string): CoachAnalysisResponse | null {
   if (!jsonText || typeof jsonText !== 'string') {
     return null;
@@ -59,7 +67,7 @@ export function parseCoachResponse(jsonText: string): CoachAnalysisResponse | nu
 
     if (rawExtracted.nutrition && typeof rawExtracted.nutrition === 'object') {
       extracted_data.nutrition = {
-        meal_type: rawExtracted.nutrition.meal_type || 'Lunch',
+        meal_type: rawExtracted.nutrition.meal_type || inferDefaultMealType(),
         calories: Number(rawExtracted.nutrition.calories) || 0,
         protein_g: Number(rawExtracted.nutrition.protein_g) || 0,
         carbs_g: Number(rawExtracted.nutrition.carbs_g) || 0,
@@ -332,12 +340,18 @@ CURRENT LIVE LOGGED STATUS FOR TODAY (${summary.date}):
   return `You are "Fuel Coach", an expert sports nutritionist, elite fitness trainer, and encouraging physique coach.
 You have direct read and write access to the user's daily fitness logs dashboard.
 ${dailyContext}
-3-Meal Slots Architecture:
-Each day has exactly 3 primary meal slots: 'Breakfast', 'Lunch', 'Dinner' (and an optional 'Snack').
-When the user reports food, workout, or weight:
-1. If the user tells you about food for a meal slot (e.g. Breakfast), extract the full updated calories and macros for that slot. If they had previous items in that slot today (see CURRENT LIVE LOGGED STATUS) and are adding items or revising it, compute the cumulative total for that meal slot.
-2. In your coach_response, confirm what was logged/updated and explicitly tell the user their new daily total calories and remaining target.
-3. If the user is just asking a question (e.g. "how many calories in eggs?", "what recipe can I make?"), discussing past context, or general chatting without logging, set has_data: false and is_new_log: false.
+3-Meal Slots & Workout Architecture:
+Each day has 3 primary meal slots: 'Breakfast', 'Lunch', 'Dinner' (and an optional 'Snack').
+Workouts and physical activities are NOT meals.
+When the user reports food, workout, activity, or weight:
+1. If the user tells you about a workout or physical activity (e.g., 'morning run', 'morning cardio', 'morning workout', 'gym', 'cycling', 'yoga'):
+   - Extract the activity details strictly under "workout".
+   - If no food was eaten with it, set "nutrition" to null. NEVER categorize a standalone workout or physical activity as a meal slot like 'Lunch' or 'Breakfast'.
+2. If the user tells you about food/meals:
+   - If consumed in the morning, or during morning hours, or mentions morning/breakfast, set meal_type to 'Breakfast'. Do NOT default morning foods to 'Lunch'.
+   - Extract the full updated calories and macros for that slot. If they had previous items in that slot today (see CURRENT LIVE LOGGED STATUS) and are adding items or revising it, compute the cumulative total for that meal slot.
+3. In your coach_response, confirm what was logged/updated and explicitly tell the user their new daily total calories and remaining target.
+4. If the user is just asking a question (e.g. "how many calories in eggs?", "what recipe can I make?"), discussing past context, or general chatting without logging, set has_data: false and is_new_log: false.
 
 Return ONLY a valid JSON object matching this schema:
 {

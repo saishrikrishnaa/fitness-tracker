@@ -28,6 +28,22 @@ export function getDb(): Promise<SQLite.SQLiteDatabase> {
   return dbPromise;
 }
 
+export async function fixMisattributedWorkoutLogs(db: SQLite.SQLiteDatabase): Promise<number> {
+  try {
+    const result = await db.runAsync(`
+      UPDATE fitness_logs
+      SET meal_type = 'Workout'
+      WHERE meal_type = 'Lunch'
+        AND (calories = 0 OR calories IS NULL)
+        AND workout_notes IS NOT NULL
+        AND TRIM(workout_notes) != ''
+    `);
+    return result.changes || 0;
+  } catch {
+    return 0;
+  }
+}
+
 export async function initDatabase(db: SQLite.SQLiteDatabase): Promise<void> {
   // 1. Create base tables
   await db.execAsync(`
@@ -94,6 +110,9 @@ export async function initDatabase(db: SQLite.SQLiteDatabase): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_chat_session ON chat_messages(session_id);
     CREATE INDEX IF NOT EXISTS idx_chat_created_at ON chat_messages(created_at);
   `);
+
+  // 4. Fix any existing misattributed logs (e.g. workout marked as Lunch)
+  await fixMisattributedWorkoutLogs(db);
 }
 
 export function formatLogForStorage(entry: NewFitnessLog) {
@@ -303,6 +322,12 @@ export async function upsertDailyMealLog(
 
   if (existingRows && existingRows.length > 0) {
     const existing = existingRows[0] as any;
+    const updatedWorkoutNotes = workout_notes
+      ? (existing.workout_notes && existing.workout_notes !== workout_notes
+          ? `${existing.workout_notes}, ${workout_notes}`
+          : workout_notes)
+      : existing.workout_notes;
+
     await db.runAsync(
       `UPDATE fitness_logs SET
         calories = ?,
@@ -310,7 +335,7 @@ export async function upsertDailyMealLog(
         carbs_g = ?,
         fat_g = ?,
         weight_kg = COALESCE(?, weight_kg),
-        workout_notes = COALESCE(?, workout_notes),
+        workout_notes = ?,
         wind_down = COALESCE(?, wind_down),
         meal_photo_uri = COALESCE(?, meal_photo_uri),
         progress_photo_uri = COALESCE(?, progress_photo_uri)
@@ -321,7 +346,7 @@ export async function upsertDailyMealLog(
         carbs_g,
         fat_g,
         weight_kg,
-        workout_notes,
+        updatedWorkoutNotes,
         wind_down,
         meal_photo_uri,
         progress_photo_uri,
@@ -355,10 +380,34 @@ export async function upsertDailyMealLog(
   return result.lastInsertRowId;
 }
 
+export function inferMealType(userText?: string, time?: Date): MealType {
+  const text = (userText || '').toLowerCase();
+  if (text.includes('breakfast') || text.includes('morning')) {
+    return 'Breakfast';
+  }
+  if (text.includes('lunch') || text.includes('noon') || text.includes('afternoon')) {
+    return 'Lunch';
+  }
+  if (text.includes('dinner') || text.includes('evening') || text.includes('night') || text.includes('supper')) {
+    return 'Dinner';
+  }
+  if (text.includes('snack')) {
+    return 'Snack';
+  }
+
+  const d = time || new Date();
+  const hour = d.getHours();
+  if (hour < 12) return 'Breakfast';
+  if (hour < 17) return 'Lunch';
+  if (hour < 22) return 'Dinner';
+  return 'Snack';
+}
+
 export async function saveLogFromExtractedData(
   extracted: ChatExtractedData,
   mealPhotoUri?: string | null,
-  progressPhotoUri?: string | null
+  progressPhotoUri?: string | null,
+  userText?: string
 ): Promise<number | null> {
   if (!extracted.has_data || extracted.is_new_log === false) {
     return null;
@@ -367,7 +416,30 @@ export async function saveLogFromExtractedData(
   const timestamp = now.toISOString();
   const date = timestamp.split('T')[0];
 
-  const mealType = extracted.nutrition?.meal_type || 'Lunch';
+  const hasNutrition = Boolean(
+    extracted.nutrition &&
+    (extracted.nutrition.calories > 0 ||
+      (extracted.nutrition.food_items && extracted.nutrition.food_items.length > 0))
+  );
+
+  let mealType: MealType;
+  if (!hasNutrition && extracted.workout) {
+    mealType = 'Workout';
+  } else if (extracted.nutrition?.meal_type) {
+    const textLower = (userText || '').toLowerCase();
+    if (extracted.nutrition.meal_type === 'Lunch' && (textLower.includes('morning') || textLower.includes('breakfast'))) {
+      mealType = 'Breakfast';
+    } else {
+      mealType = extracted.nutrition.meal_type;
+    }
+  } else if (hasNutrition) {
+    mealType = inferMealType(userText, now);
+  } else if (extracted.workout) {
+    mealType = 'Workout';
+  } else {
+    mealType = inferMealType(userText, now);
+  }
+
   const calories = extracted.nutrition?.calories || 0;
   const protein_g = extracted.nutrition?.protein_g || 0;
   const carbs_g = extracted.nutrition?.carbs_g || 0;
@@ -569,5 +641,38 @@ export async function clearChatMessages(sessionId?: string): Promise<void> {
   } else {
     await db.execAsync('DELETE FROM chat_messages');
   }
+}
+
+export async function getUnparsedUserMessages(sessionId?: string): Promise<ChatMessage[]> {
+  const db = await getDb();
+  let rows: any[] = [];
+  if (sessionId) {
+    rows = await db.getAllAsync(
+      `SELECT m1.* FROM chat_messages m1
+       WHERE m1.session_id = ?
+         AND m1.sender = 'user'
+         AND NOT EXISTS (
+           SELECT 1 FROM chat_messages m2
+           WHERE m2.session_id = m1.session_id
+             AND m2.sender = 'coach'
+             AND m2.id > m1.id
+         )
+       ORDER BY m1.id ASC`,
+      [sessionId]
+    );
+  } else {
+    rows = await db.getAllAsync(
+      `SELECT m1.* FROM chat_messages m1
+       WHERE m1.sender = 'user'
+         AND NOT EXISTS (
+           SELECT 1 FROM chat_messages m2
+           WHERE m2.session_id = m1.session_id
+             AND m2.sender = 'coach'
+             AND m2.id > m1.id
+         )
+       ORDER BY m1.id ASC`
+    );
+  }
+  return rows.map(parseDbRowToChatMessage);
 }
 

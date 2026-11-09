@@ -13,6 +13,8 @@ import {
   Platform,
   Modal,
   ScrollView,
+  AppState,
+  AppStateStatus,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
@@ -35,6 +37,11 @@ import { COLORS } from '../../constants/theme';
 import { MealType, ChatMessage, ChatSession } from '../../types/fitness';
 import { sendChatMessageToCoach } from '../../services/gemini';
 import { savePhotoLocally } from '../../services/storage';
+import {
+  processPendingMessages,
+  isQueueProcessing,
+  subscribeToQueue,
+} from '../../services/chatQueue';
 import {
   getChatMessages,
   saveChatMessage,
@@ -87,6 +94,7 @@ export default function LogScreen(): JSX.Element {
   const [attachedImages, setAttachedImages] = useState<string[]>([]);
   const [isSending, setIsSending] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
+  const [isQueueRunning, setIsQueueRunning] = useState(isQueueProcessing());
 
   const loadSessionsAndMessages = useCallback(async () => {
     try {
@@ -120,10 +128,39 @@ export default function LogScreen(): JSX.Element {
     loadSessionsAndMessages();
   }, [loadSessionsAndMessages]);
 
+  // Subscribe to background queue events so messages reload automatically when parsed
+  useEffect(() => {
+    const unsubscribe = subscribeToQueue(() => {
+      setIsQueueRunning(isQueueProcessing());
+      if (currentSessionId) {
+        getChatMessages(currentSessionId)
+          .then((stored) => setMessages(stored))
+          .catch(() => {});
+      }
+    });
+    return () => unsubscribe();
+  }, [currentSessionId]);
+
+  // Handle app state changes (screen unlock or returning to app from background)
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state: AppStateStatus) => {
+      if (state === 'active') {
+        loadSessionsAndMessages();
+        if (currentSessionId) {
+          processPendingMessages(currentSessionId).catch(() => {});
+        }
+      }
+    });
+    return () => subscription.remove();
+  }, [currentSessionId, loadSessionsAndMessages]);
+
   useFocusEffect(
     useCallback(() => {
       loadSessionsAndMessages();
-    }, [loadSessionsAndMessages])
+      if (currentSessionId) {
+        processPendingMessages(currentSessionId).catch(() => {});
+      }
+    }, [loadSessionsAndMessages, currentSessionId])
   );
 
   const handleStartNewSession = async () => {
@@ -333,65 +370,16 @@ export default function LogScreen(): JSX.Element {
         setCurrentSessionTitle(snippet);
       }
 
-      // Build conversation history from recent messages (last 8)
-      const history = messages
-        .slice(-8)
-        .map((msg) => ({
-          role: msg.sender === 'coach' ? ('model' as const) : ('user' as const),
-          text: msg.text || (msg.image_uris?.length || msg.image_uri ? '[Images attached]' : ''),
-        }))
-        .filter((msg) => Boolean(msg.text && msg.text.trim().length > 0));
+      // Process message through background-resilient queue
+      await processPendingMessages(activeSessionId);
 
-      // Fetch live daily summary for real-time read context
-      const dailySummary = await getDailyFitnessSummary().catch(() => null);
-
-      // Query Gemini Coach with live daily summary context
-      const coachResult = await sendChatMessageToCoach(userText, imagesToSend, history, dailySummary);
-
-      let savedMealPhotoUri: string | null = null;
-      let savedProgressPhotoUri: string | null = null;
-
-      // Update today's 3-meal slot in database
-      if (coachResult.extracted_data?.has_data) {
-        if (coachResult.extracted_data.is_progress_photo && imagesToSend.length > 0) {
-          savedProgressPhotoUri = await savePhotoLocally(imagesToSend[0], 'progress');
-        } else if (coachResult.extracted_data.nutrition && imagesToSend.length > 0) {
-          savedMealPhotoUri = await savePhotoLocally(imagesToSend[0], 'meals');
-        }
-
-        await saveLogFromExtractedData(
-          coachResult.extracted_data,
-          savedMealPhotoUri,
-          savedProgressPhotoUri
-        );
-      }
-
-      // Save coach message to SQLite
-      await saveChatMessage({
-        session_id: activeSessionId,
-        sender: 'coach',
-        text: coachResult.coach_response,
-        extracted_data: coachResult.extracted_data,
-      });
-
-      // Append coach message to local state
-      const coachMsg: ChatMessage = {
-        id: Date.now() + 1,
-        session_id: activeSessionId,
-        sender: 'coach',
-        text: coachResult.coach_response,
-        image_uri: null,
-        image_uris: [],
-        extracted_data: coachResult.extracted_data,
-        created_at: new Date().toISOString(),
-      };
-      setMessages((prev) => [...prev, coachMsg]);
+      const refreshed = await getChatMessages(activeSessionId);
+      setMessages(refreshed);
 
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       flatListRef.current?.scrollToEnd({ animated: true });
     } catch (err: any) {
-      setInputText(userText);
-      setAttachedImages(imagesToSend);
+      console.warn('handleSendMessage error:', err);
       Alert.alert('Coach Error', err?.message || 'Failed to communicate with Fuel Coach.');
     } finally {
       setIsSending(false);
@@ -624,6 +612,19 @@ export default function LogScreen(): JSX.Element {
           messages.length === 0 && styles.emptyListContent,
         ]}
         ListEmptyComponent={renderEmptyState}
+        ListFooterComponent={
+          (isSending || isQueueRunning) ? (
+            <View style={styles.coachMessageRow} testID="coach-processing-indicator">
+              <View style={styles.coachAvatar}>
+                <Sparkles size={16} color="#000" />
+              </View>
+              <View style={[styles.coachBubble, styles.analyzingBubble]}>
+                <ActivityIndicator size="small" color={COLORS.primary} style={{ marginRight: 8 }} />
+                <Text style={styles.coachMessageText}>Fuel Coach is analyzing & logging...</Text>
+              </View>
+            </View>
+          ) : null
+        }
         onContentSizeChange={() => {
           if (messages.length > 0) {
             flatListRef.current?.scrollToEnd({ animated: true });
@@ -993,6 +994,10 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     borderTopLeftRadius: 4,
     padding: 14,
+  },
+  analyzingBubble: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   coachName: {
     color: COLORS.primary,

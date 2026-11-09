@@ -13,6 +13,9 @@ import {
   deleteLogEntry,
   clearAllFitnessLogs,
   deduplicateFitnessLogs,
+  fixMisattributedWorkoutLogs,
+  getUnparsedUserMessages,
+  inferMealType,
 } from '../db/database';
 import { savePhotoLocally } from '../services/storage';
 import { NewFitnessLog, ChatMessage, NewChatMessage, ChatExtractedData } from '../types/fitness';
@@ -405,7 +408,7 @@ describe('Database Operations', () => {
       expect(mockDb.runAsync).toHaveBeenCalledWith(
         expect.stringContaining('INSERT INTO fitness_logs'),
         expect.arrayContaining([
-          'Lunch',
+          'Workout',
           0,
           0,
           0,
@@ -453,6 +456,83 @@ describe('Database Operations', () => {
       expect(mockDb.runAsync).toHaveBeenCalledWith(
         expect.stringContaining('UPDATE fitness_logs SET'),
         expect.arrayContaining([620, 620, 42, 42, 'file:///new_lunch.jpg', 10])
+      );
+    });
+
+    it('correctly maps morning activity to Workout meal_type when nutrition is null', async () => {
+      const extracted: ChatExtractedData = {
+        has_data: true,
+        action: 'create',
+        is_new_log: true,
+        workout: {
+          workout_notes: 'Morning cardio 30 mins',
+          duration_mins: 30,
+        },
+        nutrition: null,
+      };
+
+      const result = await saveLogFromExtractedData(extracted, null, null, 'morning activity: 30 mins cardio');
+      expect(result).toBe(42);
+      expect(mockDb.runAsync).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO fitness_logs'),
+        expect.arrayContaining(['Workout', 0, 'Morning cardio 30 mins'])
+      );
+    });
+
+    it('infers Breakfast if user logs food in the morning or explicitly says morning', async () => {
+      const extracted: ChatExtractedData = {
+        has_data: true,
+        action: 'create',
+        is_new_log: true,
+        nutrition: {
+          meal_type: 'Lunch', // hallucinated or defaulted
+          calories: 350,
+          protein_g: 25,
+          carbs_g: 30,
+          fat_g: 10,
+        },
+      };
+
+      const result = await saveLogFromExtractedData(extracted, null, null, 'Had morning oats and eggs');
+      expect(result).toBe(42);
+      expect(mockDb.runAsync).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO fitness_logs'),
+        expect.arrayContaining(['Breakfast', 350, 25, 30, 10])
+      );
+    });
+  });
+
+  describe('Fix Misattributed Workout Logs Migration', () => {
+    it('executes UPDATE on fitness_logs to change Lunch with 0 calories and workout_notes to Workout', async () => {
+      mockDb.runAsync.mockResolvedValueOnce({ changes: 3 });
+      const changed = await fixMisattributedWorkoutLogs(mockDb as any);
+      expect(changed).toBe(3);
+      expect(mockDb.runAsync).toHaveBeenCalledWith(
+        expect.stringMatching(/UPDATE fitness_logs\s+SET meal_type = 'Workout'\s+WHERE meal_type = 'Lunch'/)
+      );
+    });
+  });
+
+  describe('getUnparsedUserMessages', () => {
+    it('retrieves user messages that have not received a coach reply', async () => {
+      mockDb.getAllAsync.mockResolvedValueOnce([
+        {
+          id: 50,
+          session_id: 'session-123',
+          sender: 'user',
+          text: 'morning run',
+          image_uri: null,
+          extracted_data: null,
+          created_at: '2026-11-09 08:00:00',
+        },
+      ]);
+
+      const unparsed = await getUnparsedUserMessages('session-123');
+      expect(unparsed).toHaveLength(1);
+      expect(unparsed[0].text).toBe('morning run');
+      expect(mockDb.getAllAsync).toHaveBeenCalledWith(
+        expect.stringContaining("WHERE m1.session_id = ?"),
+        ['session-123']
       );
     });
   });
